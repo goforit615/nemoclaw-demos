@@ -58,7 +58,7 @@ Use your distro's equivalent for `ffmpeg`, `poppler-utils`, `lsof`, and the Pyth
 
 ## Quickstart (6 steps, ~6 min)
 
-If you've already got NemoClaw installed, this is the short version. The longer walkthrough below explains each step.
+This is the condensed version of the full walkthrough below. Skip step 1 if NemoClaw and OpenShell are already installed.
 
 ```bash
 # 1. install the NemoClaw + OpenShell CLIs
