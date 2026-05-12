@@ -1,4 +1,4 @@
-.PHONY: help setup up up-with-rag fresh fresh-with-rag down restart build rebuild gradio api stop-gradio stop-api test test-cov clean status logs logs-gradio logs-api shell games-up games-down games-restart games-logs games-build rag-up rag-down rag-build rag-health
+.PHONY: help setup up fresh down restart build rebuild gradio api stop-gradio stop-api test test-cov clean status logs logs-gradio logs-api shell games-up games-down games-restart games-logs games-build rag-up rag-down rag-build rag-health
 
 # ============================================================================
 # RAG Stack compose variables (defined early — used in multiple targets)
@@ -26,17 +26,13 @@ help:
 	@echo "║             AgenticTA Study Buddy — Commands                 ║"
 	@echo "╚═══════════════════════════════════════════════════════════════╝"
 	@echo ""
-	@echo "Start (Option A — no RAG):"
-	@echo "  make up              Start agenticta + Gradio + API (direct PDF mode)"
-	@echo "  make fresh           Wipe vector store & user files, then start (Option A)"
-	@echo ""
-	@echo "Start (Option B — with RAG):"
-	@echo "  make up-with-rag     Start agenticta + RAG stack + Gradio + API"
-	@echo "  make fresh-with-rag  Wipe vector store & user files, then start (Option B)"
+	@echo "Start:"
+	@echo "  make up              Start agenticta + RAG stack + Gradio + API"
+	@echo "  make fresh           Wipe vector store & user files, then start"
 	@echo ""
 	@echo "Stop / Restart:"
 	@echo "  make down            Stop all services (agenticta + RAG + games)"
-	@echo "  make restart         Stop then start (Option A)"
+	@echo "  make restart         Stop then start"
 	@echo ""
 	@echo "Individual services:"
 	@echo "  make gradio          Start Gradio UI       → http://localhost:7860"
@@ -78,22 +74,10 @@ setup:
 # Core start targets
 # ============================================================================
 
-# Start agenticta + Gradio + API (Option A — no RAG)
+# Start agenticta + RAG stack + Gradio + API
 up: setup
-	@echo "Starting agenticta (Option A — direct PDF mode)..."
-	@docker compose up -d
-	@docker network connect compose_default agenticta 2>/dev/null || true
-	@$(MAKE) -s _start_gradio_and_api
-	@echo ""
-	@echo "✅ AgenticTA ready!"
-	@echo "  Gradio UI:  http://localhost:7860"
-	@echo "  API + Docs: http://localhost:8000/docs"
-	@echo "  Logs:       make logs-gradio | make logs-api"
-
-# Start agenticta + RAG stack + Gradio + API (Option B)
-up-with-rag: setup
-	@echo "Starting agenticta + RAG stack (Option B)..."
-	@echo "Note: NVIDIA_API_KEY required for embedding/reranking"
+	@echo "Starting agenticta + RAG stack..."
+	@echo "Note: NGC_API_KEY required to pull RAG blueprint images from nvcr.io"
 	@docker compose up -d
 	@docker compose $(RAG_VECTORDB)  $(RAG_ENV) up -d
 	@docker compose $(RAG_INGESTOR)  $(RAG_ENV) up -d
@@ -109,7 +93,7 @@ up-with-rag: setup
 	@echo "  Milvus:     http://localhost:19530"
 	@echo "  Logs:       make logs-gradio | make logs-api"
 
-# Wipe ALL user data (PDFs, state, memory, JSON store), then start (Option A)
+# Wipe ALL user data + Milvus vector store, then start
 fresh: setup
 	@echo "🧹 Wiping all user data before start..."
 	@rm -rf mnt/*/pdfs/*.pdf 2>/dev/null || true
@@ -119,17 +103,6 @@ fresh: setup
 	@rm -rf mnt/*/memory/ 2>/dev/null || true
 	@echo "✅ User data cleared (PDFs, state, memory)"
 	@$(MAKE) up
-
-# Wipe ALL user data + Milvus vector store, then start (Option B)
-fresh-with-rag: setup
-	@echo "🧹 Wiping all user data before start..."
-	@rm -rf mnt/*/pdfs/*.pdf 2>/dev/null || true
-	@rm -rf mnt/*/state.txt 2>/dev/null || true
-	@rm -rf mnt/*/global_state.json 2>/dev/null || true
-	@rm -rf mnt/*/user_store/*.json 2>/dev/null || true
-	@rm -rf mnt/*/memory/ 2>/dev/null || true
-	@echo "✅ User data cleared (PDFs, state, memory)"
-	@$(MAKE) up-with-rag
 	@sleep 5
 	@echo "Clearing Milvus collections..."
 	@curl -s -X DELETE http://localhost:8000/api/files/collections > /dev/null 2>&1 || true

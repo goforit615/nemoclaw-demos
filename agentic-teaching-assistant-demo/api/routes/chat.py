@@ -349,7 +349,7 @@ async def stream_chat_response(
         try:
             # Try to use real backend with true LLM streaming
             from standalone_study_buddy_response_streaming import inference_call, STUDY_BUDDY_SYS_PROMPT
-            from frontendUI.study_buddy_streaming_tools import (
+            from study_buddy_streaming_tools import (
                 execute_tool_chitchat,
                 execute_tool_supplement,
                 execute_tool_calendar,
@@ -1077,7 +1077,7 @@ async def send_message(request: ChatStreamRequest):
     Uses fast_store for context reads; falls back to JSON load only when state.txt absent.
     """
     try:
-        from frontendUI.study_buddy_streaming_tools import (
+        from study_buddy_streaming_tools import (
             execute_tool_chitchat,
             execute_tool_supplement,
             execute_tool_calendar,
@@ -1151,32 +1151,19 @@ async def send_message(request: ChatStreamRequest):
             memory_ops = _get_memory_ops(request.user_id)
             memory_context, history_summary = _get_memory_context(memory_ops, request.message)
 
-        # ── Route using LLM router (with full context) ───────────────────────
-        if request.tool:
-            selected_tool = request.tool
-        else:
-            try:
-                from standalone_study_buddy_response import query_routing
-                raw = query_routing(
-                    request.message,
-                    history_summary or "",
-                    chapter_name=chapter_name or "Unknown Chapter",
-                    sub_topic=subtopic_name or "Unknown Sub-topic",
-                )
-                tool_map = {
-                    "chitchat": ToolType.CHITCHAT,
-                    "supplement": ToolType.SUPPLEMENT,
-                    "book_calendar": ToolType.BOOK_CALENDAR,
-                    "calendar": ToolType.BOOK_CALENDAR,
-                    "minigame": ToolType.MINIGAME,
-                    "study_material": ToolType.STUDY_MATERIAL,
-                    "unclear": ToolType.UNCLEAR,
-                }
-                selected_tool = tool_map.get(raw.strip().lower(), ToolType.UNCLEAR)
-                logger.info("[/message] query_routing → %s", raw.strip())
-            except Exception as _re:
-                logger.warning("[/message] query_routing failed, falling back to keyword detect: %s", _re)
-                selected_tool = _detect_tool(request.message)
+        # ── Tool selection — caller (the agent) MUST supply request.tool ──────
+        # No host-side LLM router. The OpenClaw agent has its own LLM and
+        # decides which handler to invoke; we just execute it deterministically.
+        if not request.tool:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "request.tool is required. Call the MCP per-intent tool "
+                    "(study_material_query, chitchat, or supplement_query) "
+                    "instead of dispatching from the host."
+                ),
+            )
+        selected_tool = request.tool
 
         # ── Execute the selected tool ─────────────────────────────────────────
         if selected_tool == ToolType.UNCLEAR:

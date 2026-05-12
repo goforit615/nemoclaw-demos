@@ -29,7 +29,7 @@ def create_event_with_ai(ai_input):
     if not ai_input:
         return None, "❌ Please describe the event you want to create", ""
     
-    # Delegate to CalendarService (uses NVIDIA_API_KEY from env internally)
+    # Delegate to CalendarService (uses INFERENCE_API_KEY from env internally)
     result = _calendar_service.create_event_from_description(ai_input)
     
     if not result.success:

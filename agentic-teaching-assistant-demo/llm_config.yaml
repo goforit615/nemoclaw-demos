@@ -7,29 +7,7 @@
 # Define how to connect to different LLM services
 
 providers:
-  # NVIDIA API (OpenAI-compatible endpoint)
-  nvidia:
-    type: nvidia
-    base_url: https://integrate.api.nvidia.com/v1
-    api_key_env: NVIDIA_API_KEY
-    models:
-      default: openai/gpt-oss-120b
-      fast: openai/gpt-oss-120b
-      powerful: meta/llama-3.1-405b-instruct
-      reasoning: nvidia/llama-3.1-nemotron-70b-instruct
-    rate_limit: 100/min
-    
-  # NVIDIA ASTRA deployment (DEPRECATED - deployments inactive, migrated to nvidia_inference)
-  # astra:
-  #   type: astra
-  #   endpoint: https://datarobot.prd.astra.nvidia.com/api/v2/deployments/{deployment_id}/chat/completions
-  #   deployment_id: 688e407ed8a8e0543e6d9b80
-  #   token_env: ASTRA_TOKEN
-  #   models:
-  #     default: nvidia/llama-3.3-nemotron-super-49b-v1
-  #   rate_limit: 50/min
-
-  # NVIDIA Inference Hub (inference.nvidia.com) - primary inference endpoint
+  # NVIDIA Inference Hub (inference-api.nvidia.com) - primary inference endpoint
   nvidia_inference:
     type: nvidia
     base_url: https://inference-api.nvidia.com/v1
@@ -41,6 +19,10 @@ providers:
       nemotron_nano_12b: nvidia/nvidia/nemotron-nano-12b-v2-vl
       gemini_3_flash: gcp/google/gemini-3-flash-preview
       gemini_3_pro: gcp/google/gemini-3-pro
+      # Capability aliases
+      fast: gcp/google/gemini-3-flash-preview
+      powerful: openai/openai/gpt-5.2
+      reasoning: openai/openai/gpt-5-nano
     rate_limit: 100/min
     description: "Models via NVIDIA Inference Hub (GPT-5, Claude Opus 4.5, Gemini 3, Nemotron)"
 
@@ -75,7 +57,7 @@ use_cases:
   
   chapter_title_generation:
     type: llm
-    provider: nvidia
+    provider: nvidia_inference
     model: fast
     max_tokens: 1024
     temperature: 0.7
@@ -84,7 +66,7 @@ use_cases:
     
   subtopic_title_generation:
     type: llm
-    provider: nvidia
+    provider: nvidia_inference
     model: fast
     max_tokens: 512
     temperature: 0.7
@@ -113,7 +95,7 @@ use_cases:
 
   query_decomposition:
     type: llm
-    provider: nvidia
+    provider: nvidia_inference
     model: fast
     max_tokens: 36000
     temperature: 0.3
@@ -140,7 +122,7 @@ use_cases:
   
   document_search_rerank:
     type: llm
-    provider: nvidia
+    provider: nvidia_inference
     model: fast
     max_tokens: 512
     temperature: 0.3
@@ -208,7 +190,7 @@ memory:
 # ============================================
 
 defaults:
-  provider: nvidia
+  provider: nvidia_inference
   temperature: 0.7
   max_tokens: 4096
   retry_attempts: 3

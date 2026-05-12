@@ -60,11 +60,13 @@ _DEFAULT_USER_ID = _CONFIG.get("user_id", None)
 # ---------------------------------------------------------------------------
 
 # Per-tool timeouts (seconds). generate_curriculum streams SSE for up to
-# several minutes; chat_message/upload_pdf also need extra headroom.
+# several minutes; chat tools / upload_pdf also need extra headroom.
 _TOOL_TIMEOUTS: dict[str, float] = {
-    "generate_curriculum": 300.0,
-    "chat_message":        120.0,
-    "upload_pdf":          120.0,
+    "generate_curriculum":   300.0,
+    "study_material_query":  120.0,
+    "chitchat":              120.0,
+    "supplement_query":      120.0,
+    "upload_pdf":            120.0,
 }
 _DEFAULT_TIMEOUT = 60.0
 
@@ -146,8 +148,25 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("get_curriculum", help="Retrieve current curriculum")
     p.add_argument("--user-id", **uid)
 
-    # ── Chat ─────────────────────────────────────────────────────────────────
-    p = sub.add_parser("chat_message", help="Send a message to the study buddy")
+    # ── Chat (per-intent — agent picks the tool, no host-side LLM router) ────
+    p = sub.add_parser(
+        "study_material_query",
+        help="Ask a question about the user's uploaded study material (RAG-backed)",
+    )
+    p.add_argument("--user-id", **uid)
+    p.add_argument("--message", required=True)
+
+    p = sub.add_parser(
+        "chitchat",
+        help="Friendly small-talk reply in the study-buddy persona",
+    )
+    p.add_argument("--user-id", **uid)
+    p.add_argument("--message", required=True)
+
+    p = sub.add_parser(
+        "supplement_query",
+        help="Answer a general/supplemental knowledge question (not from the PDFs)",
+    )
     p.add_argument("--user-id", **uid)
     p.add_argument("--message", required=True)
 
@@ -224,7 +243,13 @@ def main() -> None:
     elif tool == "get_curriculum":
         tool_args = {"user_id": args.user_id}
 
-    elif tool == "chat_message":
+    elif tool == "study_material_query":
+        tool_args = {"user_id": args.user_id, "message": args.message}
+
+    elif tool == "chitchat":
+        tool_args = {"user_id": args.user_id, "message": args.message}
+
+    elif tool == "supplement_query":
         tool_args = {"user_id": args.user_id, "message": args.message}
 
     elif tool == "list_subtopics":

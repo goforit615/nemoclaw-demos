@@ -103,14 +103,11 @@ def generate_curriculum(file_obj, progress=gr.Progress()):
             import time
             user_id = f"user_{int(time.time())}"
 
-            # Option B: upload PDFs to ingestor (no-op if RAG not running)
-            try:
-                from nemo_retriever_client_utils import upload_files_to_nemo_retriever
-                progress(0.2, desc="Uploading PDFs to RAG ingestor (if available)...")
-                asyncio.run(upload_files_to_nemo_retriever(new_ls, user_id))
-                print(Fore.GREEN + "[gradioUI] PDFs uploaded to ingestor" + Fore.RESET)
-            except Exception as _rag_err:
-                print(Fore.YELLOW + f"[gradioUI] Ingestor not available (Option A mode): {_rag_err}" + Fore.RESET)
+            # Upload PDFs to the RAG ingestor (mandatory — failures are fatal).
+            from nemo_retriever_client_utils import upload_files_to_nemo_retriever
+            progress(0.2, desc="Uploading PDFs to RAG ingestor...")
+            asyncio.run(upload_files_to_nemo_retriever(new_ls, user_id))
+            print(Fore.GREEN + "[gradioUI] PDFs uploaded to ingestor" + Fore.RESET)
             
             progress(0.15, desc="Initializing user...")
             u=User(

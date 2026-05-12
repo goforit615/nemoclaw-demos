@@ -3,16 +3,15 @@
 # AI Teaching Assistant — Full Install Script
 #
 # Sets up the complete stack:
-#   1. TA environment  (Docker via make up / make up-with-rag)
+#   1. TA environment  (Docker via make up — always includes the RAG stack)
 #   2. MCP server      (host Python process on port 8999)
 #   3. OpenShell skill (sandbox upload + venv + config.json)
 #
 # Idempotent — each step checks whether it is already done before acting.
 # Usage:
-#   bash install.sh [--rag] [--fresh] [sandbox-name]
+#   bash install.sh [--fresh] [sandbox-name]
 #
-#   --rag      Use Option B (with RAG stack).  Default: Option A (no RAG).
-#   --fresh    Wipe all user data before starting (make fresh / fresh-with-rag).
+#   --fresh    Wipe all user data before starting (make fresh).
 #   sandbox-name  Target sandbox (auto-detected when only one exists).
 # =============================================================================
 set -euo pipefail
@@ -27,15 +26,13 @@ SKILL_SRC="$SCRIPT_DIR/ai_teaching_assistant_skills"
 SANDBOX_SKILL_ROOT="/sandbox/.openclaw/workspace/skills/$SKILL_NAME"
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
-USE_RAG=false
 USE_FRESH=false
 SANDBOX_ARG=""
 
 for arg in "$@"; do
   case "$arg" in
-    --rag)   USE_RAG=true ;;
     --fresh) USE_FRESH=true ;;
-    -*)      echo "Unknown flag: $arg  (valid: --rag  --fresh)" >&2; exit 1 ;;
+    -*)      echo "Unknown flag: $arg  (valid: --fresh)" >&2; exit 1 ;;
     *)       SANDBOX_ARG="$arg" ;;
   esac
 done
@@ -55,8 +52,7 @@ echo -e "${CYAN}  ║  AI Teaching Assistant — Full Stack Installer           
 echo -e "${CYAN}  ║  AgenticTA  +  MCP Server  +  OpenShell Skill           ║${NC}"
 echo -e "${CYAN}  ╚══════════════════════════════════════════════════════════╝${NC}"
 echo ""
-$USE_RAG  && echo -e "  Mode  : ${GREEN}Option B — with RAG stack${NC}" \
-          || echo -e "  Mode  : ${YELLOW}Option A — no RAG (direct PDF)${NC}"
+echo -e "  Mode  : ${GREEN}Full stack — agenticta + RAG (mandatory)${NC}"
 $USE_FRESH && echo -e "  Fresh : ${YELLOW}yes — user data will be wiped${NC}"
 echo ""
 
@@ -122,30 +118,29 @@ _container_running() {
     | grep -q "agenticta"
 }
 
-# ── 2a. Ensure RAG blueprint and cloud .env are ready (Option B only) ────────
-if $USE_RAG; then
-  RAG_COMPOSE_DIR="$SCRIPT_DIR/rag/deploy/compose"
+# ── 2a. Ensure RAG blueprint and cloud .env are ready (always) ───────────────
+RAG_COMPOSE_DIR="$SCRIPT_DIR/rag/deploy/compose"
 
-  # Clone NVIDIA-AI-Blueprints/rag if compose files are missing
-  if [ ! -f "$RAG_COMPOSE_DIR/vectordb.yaml" ]; then
-    info "RAG blueprint not found — cloning NVIDIA-AI-Blueprints/rag..."
-    command -v git >/dev/null 2>&1 || fail "git not found. Install git and retry."
-    # Remove stale incomplete rag/ dir (no .git inside) before fresh clone
-    if [ -d "$SCRIPT_DIR/rag" ] && [ ! -d "$SCRIPT_DIR/rag/.git" ]; then
-      rm -rf "$SCRIPT_DIR/rag"
-    fi
-    git clone https://github.com/NVIDIA-AI-Blueprints/rag.git "$SCRIPT_DIR/rag" \
-      || fail "Failed to clone NVIDIA-AI-Blueprints/rag. Check network connectivity."
-    ok "RAG blueprint cloned → rag/"
-  else
-    ok "RAG blueprint present"
+# Clone NVIDIA-AI-Blueprints/rag if compose files are missing
+if [ ! -f "$RAG_COMPOSE_DIR/vectordb.yaml" ]; then
+  info "RAG blueprint not found — cloning NVIDIA-AI-Blueprints/rag..."
+  command -v git >/dev/null 2>&1 || fail "git not found. Install git and retry."
+  # Remove stale incomplete rag/ dir (no .git inside) before fresh clone
+  if [ -d "$SCRIPT_DIR/rag" ] && [ ! -d "$SCRIPT_DIR/rag/.git" ]; then
+    rm -rf "$SCRIPT_DIR/rag"
   fi
+  git clone https://github.com/NVIDIA-AI-Blueprints/rag.git "$SCRIPT_DIR/rag" \
+    || fail "Failed to clone NVIDIA-AI-Blueprints/rag. Check network connectivity."
+  ok "RAG blueprint cloned → rag/"
+else
+  ok "RAG blueprint present"
+fi
 
-  # Always read the NGC key from the root .env (authoritative source)
-  _ngc_key=$(grep "^NVIDIA_API_KEY=" "$SCRIPT_DIR/.env" | cut -d= -f2 | awk '{print $1}')
-  [ -n "$_ngc_key" ] || fail "NVIDIA_API_KEY not set in root .env — required for NGC_API_KEY"
-  _prompt_yaml="$SCRIPT_DIR/rag/src/nvidia_rag/rag_server/prompt.yaml"
-  [ -f "$_prompt_yaml" ] || fail "Expected prompt.yaml not found at $_prompt_yaml"
+# Always read the NGC key from the root .env (authoritative source)
+_ngc_key=$(grep "^NGC_API_KEY=" "$SCRIPT_DIR/.env" | cut -d= -f2 | awk '{print $1}')
+[ -n "$_ngc_key" ] || fail "NGC_API_KEY not set in root .env — required to pull the NVIDIA-AI-Blueprints/rag Docker images from nvcr.io"
+_prompt_yaml="$SCRIPT_DIR/rag/src/nvidia_rag/rag_server/prompt.yaml"
+[ -f "$_prompt_yaml" ] || fail "Expected prompt.yaml not found at $_prompt_yaml"
 
   # Build rag/deploy/compose/.env from nvdev.env if it is missing OR if it
   # does not contain a resolved NGC_API_KEY value (e.g. it still has the
@@ -225,42 +220,60 @@ PYEOF
     grep -q "APP_VECTORSTORE_ENABLEGPUINDEX" "$_rag_env" 2>/dev/null \
       || echo "export APP_VECTORSTORE_ENABLEGPUINDEX=False" >> "$_rag_env"
     ok "RAG .env: CPU Milvus settings appended"
+
+    # Stage cpu-override.yaml into the RAG compose dir — `make up` includes it
+    # via `-f rag/deploy/compose/cpu-override.yaml` on CPU hosts, so it must
+    # exist at that path or docker compose aborts before starting any service.
+    _cpu_override_src="$SCRIPT_DIR/cpu-override.yaml"
+    _cpu_override_dst="$RAG_COMPOSE_DIR/cpu-override.yaml"
+    if [ ! -f "$_cpu_override_src" ]; then
+      fail "cpu-override.yaml not found at $_cpu_override_src — required for CPU-only hosts"
+    fi
+    if [ ! -f "$_cpu_override_dst" ] || ! cmp -s "$_cpu_override_src" "$_cpu_override_dst"; then
+      cp "$_cpu_override_src" "$_cpu_override_dst"
+      ok "cpu-override.yaml staged → $_cpu_override_dst"
+    else
+      ok "cpu-override.yaml already staged"
+    fi
   fi
 
-  # Log in to nvcr.io using the key from root .env (always fresh, avoids
-  # stale/unresolved values in the RAG .env)
-  if echo "$_ngc_key" | docker login nvcr.io -u '$oauthtoken' --password-stdin >/dev/null 2>&1; then
-    ok "Logged in to nvcr.io"
-  else
-    fail "docker login nvcr.io failed — verify NVIDIA_API_KEY in root .env has NGC registry access"
-  fi
+# Log in to nvcr.io using the key from root .env (always fresh, avoids
+# stale/unresolved values in the RAG .env)
+if echo "$_ngc_key" | docker login nvcr.io -u '$oauthtoken' --password-stdin >/dev/null 2>&1; then
+  ok "Logged in to nvcr.io"
+else
+  fail "docker login nvcr.io failed — verify NGC_API_KEY in root .env has NGC registry access"
 fi
 
 # ── 2b. Check / start the Docker stack ───────────────────────────────────────
 # Skip make up only when the container is running AND --fresh was NOT requested.
-# With --fresh we always go through make fresh-* to wipe + restart cleanly.
+# With --fresh we always go through make fresh to wipe + restart cleanly.
 if _container_running && ! $USE_FRESH; then
   ok "agenticta container already running — skipping make up"
+  # The in-container FastAPI/Gradio processes are launched by `make up`, not by
+  # the container start — if they died (or never started), the API health wait
+  # below will time out.  Re-launch them when the API is not responding.
+  if ! _ta_api_up; then
+    info "TA API not responding inside the running container — starting FastAPI + Gradio"
+    make api    || fail "make api failed.    Check: make logs-api"
+    make gradio || fail "make gradio failed. Check: make logs-gradio"
+  else
+    ok "TA API already responding"
+  fi
   # RAG services may not be running even when agenticta is — start them if needed
-  if $USE_RAG; then
-    if ! curl -sf --max-time 3 "http://localhost:8082/v1/health" >/dev/null 2>&1; then
-      info "RAG services not running — starting with make rag-up"
-      make rag-up || fail "make rag-up failed. Check: make rag-health"
-    else
-      ok "RAG services already running"
-    fi
+  if ! curl -sf --max-time 3 "http://localhost:8082/v1/health" >/dev/null 2>&1; then
+    info "RAG services not running — starting with make rag-up"
+    make rag-up || fail "make rag-up failed. Check: make rag-health"
+  else
+    ok "RAG services already running"
   fi
 else
   if $USE_FRESH; then
-    $USE_RAG && info "Running: make fresh-with-rag" \
-             || info "Running: make fresh"
-    $USE_RAG && make fresh-with-rag \
-             || make fresh
+    info "Running: make fresh"
+    make fresh
   else
-    $USE_RAG && info "Running: make up-with-rag" \
-             || info "Running: make up"
-    $USE_RAG && make up-with-rag \
-             || make up
+    info "Running: make up"
+    make up
   fi
 fi
 
@@ -276,29 +289,27 @@ done
 $TA_UP || fail "TA API did not come up after 60 s. Check: make logs-api"
 ok "TA API is healthy (http://localhost:8000)"
 
-# ── 2c. If RAG mode: wait for RAG services ───────────────────────────────────
-if $USE_RAG; then
-  info "Waiting for ingestor (localhost:8082)..."
-  INGESTOR_UP=false
-  for i in $(seq 1 30); do
-    curl -sf --max-time 3 "http://localhost:8082/v1/health" >/dev/null 2>&1 \
-      && INGESTOR_UP=true && break
-    sleep 2
-  done
-  $INGESTOR_UP || fail "Ingestor did not come up. Check: make logs"
+# ── 2c. Wait for RAG services ────────────────────────────────────────────────
+info "Waiting for ingestor (localhost:8082)..."
+INGESTOR_UP=false
+for i in $(seq 1 30); do
+  curl -sf --max-time 3 "http://localhost:8082/v1/health" >/dev/null 2>&1 \
+    && INGESTOR_UP=true && break
+  sleep 2
+done
+$INGESTOR_UP || fail "Ingestor did not come up. Check: make logs"
 
-  info "Waiting for RAG server (localhost:8081)..."
-  RAG_UP=false
-  for i in $(seq 1 30); do
-    curl -sf --max-time 3 "http://localhost:8081/v1/health" >/dev/null 2>&1 \
-      && RAG_UP=true && break
-    sleep 2
-  done
-  $RAG_UP || fail "RAG server did not come up. Check: make logs"
+info "Waiting for RAG server (localhost:8081)..."
+RAG_UP=false
+for i in $(seq 1 30); do
+  curl -sf --max-time 3 "http://localhost:8081/v1/health" >/dev/null 2>&1 \
+    && RAG_UP=true && break
+  sleep 2
+done
+$RAG_UP || fail "RAG server did not come up. Check: make logs"
 
-  ok "Ingestor    : http://localhost:8082"
-  ok "RAG server  : http://localhost:8081"
-fi
+ok "Ingestor    : http://localhost:8082"
+ok "RAG server  : http://localhost:8081"
 
 # =============================================================================
 # STEP 2b — Build Study Break Games SPA
@@ -399,8 +410,22 @@ _live_sandboxes() {
 LIVE_COUNT=$(_live_sandboxes | wc -l | tr -d ' ')
 
 if [ "${LIVE_COUNT:-0}" -eq 0 ]; then
-  info "No sandbox found — running 'nemoclaw onboard'..."
-  nemoclaw onboard
+  info "No sandbox found — running 'nemoclaw onboard' (non-interactive)..."
+  # Drive nemoclaw onboard end-to-end without prompts.  The "NVIDIA Endpoints"
+  # menu option points at integrate.api.nvidia.com (the API Catalog) and would
+  # try to auth our INFERENCE_API_KEY against the wrong endpoint, so we pick
+  # the "custom" (Other OpenAI-compatible) provider and feed it the Inference
+  # Hub base URL + key directly.  Step 5 below replaces this provisional
+  # provider with the canonical INFERENCE_PROVIDER_NAME anyway.
+  export NEMOCLAW_NON_INTERACTIVE=1
+  export NEMOCLAW_PROVIDER=custom
+  export NEMOCLAW_ENDPOINT_URL="${INFERENCE_BASE_URL}"
+  export NEMOCLAW_MODEL="${INFERENCE_MODEL}"
+  export COMPATIBLE_API_KEY="${INFERENCE_API_KEY}"
+  # Some legacy code paths still look for NVIDIA_API_KEY by name; stage the
+  # same key there too so any incidental check finds a value.
+  export NVIDIA_API_KEY="${INFERENCE_API_KEY}"
+  nemoclaw onboard --non-interactive
   ok "Onboarding complete"
 
   info "Waiting for sandbox to become ready..."
@@ -783,13 +808,11 @@ _check "fastmcp venv : $SKILL_VENV"  "$FM_V"
 GAMES_V=$([ -f "$SCRIPT_DIR/StudyBreakGames/dist/index.html" ] && echo ok || echo fail)
 _check "Games SPA    : StudyBreakGames/dist/"  "$GAMES_V"
 
-# If RAG mode: ingestor + RAG server
-if $USE_RAG; then
-  INGESTOR_V=$(curl -sf --max-time 3 "http://localhost:8082/v1/health" >/dev/null 2>&1 && echo ok || echo fail)
-  _check "Ingestor     : http://localhost:8082"  "$INGESTOR_V"
-  RAG_V=$(curl -sf --max-time 3 "http://localhost:8081/v1/health" >/dev/null 2>&1 && echo ok || echo fail)
-  _check "RAG server   : http://localhost:8081"  "$RAG_V"
-fi
+# RAG services: ingestor + RAG server
+INGESTOR_V=$(curl -sf --max-time 3 "http://localhost:8082/v1/health" >/dev/null 2>&1 && echo ok || echo fail)
+_check "Ingestor     : http://localhost:8082"  "$INGESTOR_V"
+RAG_V=$(curl -sf --max-time 3 "http://localhost:8081/v1/health" >/dev/null 2>&1 && echo ok || echo fail)
+_check "RAG server   : http://localhost:8081"  "$RAG_V"
 
 # =============================================================================
 # Done
@@ -824,5 +847,5 @@ echo "    openshell sandbox exec -n $SANDBOX_NAME -- \\"
 echo "      ${SKILL_VENV}/bin/python3 ${SANDBOX_SKILL_ROOT}/scripts/setup_config.py"
 echo ""
 echo "  Restart MCP server:"
-echo "    kill \$(cat $MCP_PID_FILE) && bash $SCRIPT_DIR/install.sh${USE_RAG:+ --rag} $SANDBOX_NAME"
+echo "    kill \$(cat $MCP_PID_FILE) && bash $SCRIPT_DIR/install.sh $SANDBOX_NAME"
 echo ""

@@ -11,6 +11,9 @@ user_id is pre-configured in `$SKILL_DIR/config.json` — **do not ask the user 
 
 ## Routing Rules — follow BEFORE responding
 
+You pick the tool. There is no host-side LLM router — the three chat tools
+below map 1-to-1 to deterministic handlers on the host.
+
 | User says | What to run |
 |-----------|-------------|
 | upload / add / share a PDF | `$SKILL get_upload_link` — give user the URL returned |
@@ -18,7 +21,9 @@ user_id is pre-configured in `$SKILL_DIR/config.json` — **do not ask the user 
 | done / uploaded (after image) | `$SKILL get_last_vlm_response` — retrieve and show the VLM answer |
 | done / uploaded (after PDF) | `$SKILL generate_curriculum` |
 | what topics / subtopics | `$SKILL list_subtopics` |
-| explain / study [topic] | `$SKILL chat_message --message "..."` |
+| explain / summarise / give an example from the study material | `$SKILL study_material_query --message "..."` |
+| friendly small-talk, greeting, encouragement | `$SKILL chitchat --message "..."` |
+| general / supplemental knowledge unrelated to the PDFs | `$SKILL supplement_query --message "..."` |
 | quiz me on [topic] | `$SKILL list_subtopics` then `$SKILL generate_quiz --subtopic-number N` |
 | my answers are... | `$SKILL submit_quiz --subtopic-number N --answers "A,B,C"` |
 | book a study session | `$SKILL book_calendar --text "..."` |
@@ -52,7 +57,8 @@ user_id is pre-configured in `$SKILL_DIR/config.json` — **do not ask the user 
 
 ### Step 4 — Co-Study Session 🤝
 - Begin studying together chapter by chapter
-- Use `$SKILL chat_message` for any study questions
+- Use `$SKILL study_material_query` for questions grounded in the user's PDFs;
+  `$SKILL supplement_query` for general background; `$SKILL chitchat` for casual replies
 - Explain concepts, check understanding, and keep things engaging
 
 ### Step 5 — Introduce Available Study Tools 🛠️

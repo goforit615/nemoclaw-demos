@@ -203,15 +203,13 @@ async def upload_files(
             detail={"message": "All files failed to upload", "errors": errors}
         )
 
-    # Auto-ingest into Milvus if the ingestor is reachable
-    ingested = False
+    # Ingest into Milvus — the RAG stack is mandatory, so failures here are fatal.
     if uploaded_files:
+        from nemo_retriever_client_utils import (
+            fetch_collections, create_collection, upload_files_to_nemo_retriever
+        )
+        collection_name = user_id
         try:
-            from nemo_retriever_client_utils import (
-                fetch_collections, create_collection, upload_files_to_nemo_retriever
-            )
-            import asyncio
-            collection_name = user_id
             collections_response = await fetch_collections()
             existing = [
                 c.get("name", c) if isinstance(c, dict) else c
@@ -221,14 +219,17 @@ async def upload_files(
                 await create_collection(collection_name)
             file_paths = [f["path"] for f in uploaded_files]
             await upload_files_to_nemo_retriever(file_paths, collection_name)
-            ingested = True
-        except Exception as _e:
-            import logging as _logging
-            _logging.getLogger(__name__).warning("[upload] Auto-ingest failed (RAG may not be running): %s", _e)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "message": "Ingestion into the RAG vector store failed. "
+                               "The RAG stack is mandatory — check ingestor (port 8082) health.",
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            ) from exc
 
-    message = f"Successfully uploaded {len(uploaded_files)} file(s)"
-    if ingested:
-        message += " and ingested into vector store"
+    message = f"Successfully uploaded {len(uploaded_files)} file(s) and ingested into vector store"
     if errors:
         message += f". {len(errors)} file(s) failed."
 

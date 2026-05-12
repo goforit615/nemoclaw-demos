@@ -115,28 +115,6 @@ study_material_gen_prompts= PromptTemplate(
     Begin""")
 )
 
-def _extract_context_from_pdf(pdf_path: str, sub_topic: str, max_pages: int = 8) -> str:
-    """Extract relevant text from a PDF directly, used when RAG server is unavailable."""
-    try:
-        from extract_sub_chapters import parallel_extract_pdf_page_and_text
-        pages = parallel_extract_pdf_page_and_text(pdf_path)
-        if not pages:
-            return ""
-        keywords = set(w.lower() for w in sub_topic.split() if len(w) > 3)
-        scored = []
-        for text in pages:
-            if not isinstance(text, str) or not text.strip():
-                continue
-            score = sum(1 for kw in keywords if kw in text.lower())
-            scored.append((score, text.strip()))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        top = [t for _, t in scored[:max_pages] if t]
-        return "\n\n".join(top)
-    except Exception as e:
-        print(Fore.RED + f"[study_material_gen] Direct PDF extraction failed: {e}" + Fore.RESET)
-        return ""
-
-
 async def study_material_gen(username, subject, sub_topic, pdf_file_name, num_docs, pdf_path=None):
     valid_flag = False
     cnt = 0
@@ -154,17 +132,11 @@ async def study_material_gen(username, subject, sub_topic, pdf_file_name, num_do
     if not valid_flag:
         valid_flag, output, img_str = await filter_documents_by_file_name(username, sub_topic, None, num_docs)
 
-    # Fallback: extract text directly from the PDF when RAG is unavailable or returns empty
-    if (not valid_flag or not output) and pdf_path and os.path.exists(pdf_path):
-        print(Fore.YELLOW + f"[study_material_gen] RAG unavailable/empty — falling back to direct PDF extraction: {pdf_path}" + Fore.RESET)
-        output = _extract_context_from_pdf(pdf_path, sub_topic)
-        if output:
-            valid_flag = True
-            img_str = ""
-            print(Fore.GREEN + f"[study_material_gen] Direct PDF extraction: {len(output)} chars of context" + Fore.RESET)
-        else:
-            print(Fore.YELLOW + "[study_material_gen] Direct PDF extraction also empty — LLM will use only subtopic name" + Fore.RESET)
-            output = ""
+    if not valid_flag or not output:
+        raise RuntimeError(
+            f"[study_material_gen] RAG server returned no chunks for sub_topic={sub_topic!r}. "
+            "The RAG stack is mandatory — check ingestor (port 8082) and rag-server (port 8081) health."
+        )
     if isinstance(output,str):
         detail_context=output
         study_material_generation_prompt_formatted=study_material_gen_prompts.format(subject=subject, sub_topic=sub_topic, detail_context=detail_context)

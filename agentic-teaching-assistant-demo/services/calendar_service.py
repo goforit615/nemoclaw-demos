@@ -88,11 +88,11 @@ class CalendarService:
         Initialize CalendarService.
         
         Args:
-            api_key: NVIDIA API key. If None, reads from NVIDIA_API_KEY env var.
+            api_key: NVIDIA Inference Hub API key. If None, reads from INFERENCE_API_KEY env var.
             model: LLM model to use for parsing.
             timezone: Default timezone for events.
         """
-        self.api_key = api_key or os.environ.get('NVIDIA_API_KEY')
+        self.api_key = api_key or os.environ.get('INFERENCE_API_KEY')
         self.model = model
         self.timezone = timezone
         self._tz = zoneinfo.ZoneInfo(timezone)
@@ -290,7 +290,7 @@ IMPORTANT: Return ONLY the JSON object, no explanations.
         if not self.api_key:
             return CalendarEventResult(
                 success=False,
-                status_message="NVIDIA API key not configured. Set NVIDIA_API_KEY environment variable.",
+                status_message="NVIDIA Inference Hub API key not configured. Set INFERENCE_API_KEY environment variable.",
                 error="Missing API key"
             )
         

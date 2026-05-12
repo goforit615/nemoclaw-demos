@@ -10,7 +10,6 @@ services:
     image: ta_master:latest
     container_name: agenticta
     environment:
-      - NVIDIA_API_KEY=${NVIDIA_API_KEY}
       - INFERENCE_API_KEY=${INFERENCE_API_KEY:-}
       - HF_TOKEN=${HF_TOKEN:-}
       - AGENTICTA_DEBUG=${AGENTICTA_DEBUG:-false}

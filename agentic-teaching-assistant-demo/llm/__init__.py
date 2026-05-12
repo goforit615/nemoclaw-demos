@@ -3,8 +3,7 @@
 This module provides a unified interface for creating LLM instances,
 automatically handling API keys and endpoint configuration.
 
-Endpoints:
-  - integrate.api.nvidia.com   (NVIDIA API Catalog – NVIDIA_API_KEY)
+Endpoint:
   - inference-api.nvidia.com   (NVIDIA Inference Hub – INFERENCE_API_KEY)
 
 Migration note (March 2026):
@@ -48,24 +47,15 @@ DEFAULT_MAX_RETRIES = 2
 warnings.filterwarnings("ignore", message=".*does not end in /v1.*")
 
 # =============================================================================
-# Endpoint base URLs
+# Endpoint base URL
 # =============================================================================
-NVIDIA_API_BASE_URL = "https://integrate.api.nvidia.com/v1"
 INFERENCE_BASE_URL = "https://inference-api.nvidia.com/v1"
 
 # =============================================================================
 # Model registry: alias → (model_name, api_key_env, base_url)
-#
-# base_url=None  → ChatNVIDIA built-in default (integrate.api.nvidia.com)
-# base_url=str   → explicit override
+# All models route through the NVIDIA Inference Hub using INFERENCE_API_KEY.
 # =============================================================================
 MODELS = {
-    # --- NVIDIA API Catalog (integrate.api.nvidia.com) ---
-    # Auth: NVIDIA_API_KEY   |  Rate limit: 100 req/min
-    "fast": ("openai/gpt-oss-120b", "NVIDIA_API_KEY", None),
-    "powerful": ("meta/llama-3.1-405b-instruct", "NVIDIA_API_KEY", None),
-    "reasoning": ("nvidia/llama-3.1-nemotron-70b-instruct", "NVIDIA_API_KEY", None),
-
     # --- NVIDIA Inference Hub (inference-api.nvidia.com) ---
     # Auth: INFERENCE_API_KEY   |  Rate limit: 100 req/min
     # Note: gpt-5-nano is a reasoning model; it uses "reasoning tokens"
@@ -74,6 +64,11 @@ MODELS = {
     "gpt_5_nano": ("openai/openai/gpt-5-nano", "INFERENCE_API_KEY", INFERENCE_BASE_URL),
     "gpt_5_2": ("openai/openai/gpt-5.2", "INFERENCE_API_KEY", INFERENCE_BASE_URL),
     "gemini_3_flash": ("gcp/google/gemini-3-flash-preview", "INFERENCE_API_KEY", INFERENCE_BASE_URL),
+
+    # --- Capability aliases (all on Inference Hub) ---
+    "fast": ("gcp/google/gemini-3-flash-preview", "INFERENCE_API_KEY", INFERENCE_BASE_URL),
+    "powerful": ("openai/openai/gpt-5.2", "INFERENCE_API_KEY", INFERENCE_BASE_URL),
+    "reasoning": ("openai/openai/gpt-5-nano", "INFERENCE_API_KEY", INFERENCE_BASE_URL),
 
     # --- Legacy alias ---
     # "astra" previously pointed to the ASTRA deployment (now inactive).
@@ -198,6 +193,5 @@ __all__ = [
     "USE_CASES",
     "DEFAULT_TIMEOUT",
     "DEFAULT_MAX_RETRIES",
-    "NVIDIA_API_BASE_URL",
     "INFERENCE_BASE_URL",
 ]

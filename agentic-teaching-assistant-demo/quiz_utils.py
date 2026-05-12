@@ -2,7 +2,6 @@
 Quiz parsing utilities.
 
 These functions parse quiz data from LLM responses into standardized format.
-Moved from frontendUI/utils.py to avoid circular imports.
 """
 import re
 from colorama import Fore

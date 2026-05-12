@@ -10,7 +10,7 @@ Usage:
     # Then run tests:
     python3 mcp_client_test.py                         # run all tests
     python3 mcp_client_test.py health_check            # single tool
-    python3 mcp_client_test.py chat_message            # single test
+    python3 mcp_client_test.py study_material_query    # single test
     python3 mcp_client_test.py --url http://localhost:9001/mcp health_check
 """
 
@@ -93,10 +93,24 @@ async def test_submit_quiz(client, subtopic_number: int = 0, answers: str = "A,A
     print(out)
 
 
-async def test_chat_message(client, message: str = "What are the key concepts in this chapter?"):
-    _header("chat_message")
+async def test_study_material_query(client, message: str = "What are the key concepts in this chapter?"):
+    _header("study_material_query")
     print(f"  message: {message!r}")
-    out = await call(client, "chat_message", user_id=_USER_ID, message=message)
+    out = await call(client, "study_material_query", user_id=_USER_ID, message=message)
+    print(out)
+
+
+async def test_chitchat(client, message: str = "Thanks, you're a great tutor!"):
+    _header("chitchat")
+    print(f"  message: {message!r}")
+    out = await call(client, "chitchat", user_id=_USER_ID, message=message)
+    print(out)
+
+
+async def test_supplement_query(client, message: str = "What's the history of backpropagation?"):
+    _header("supplement_query")
+    print(f"  message: {message!r}")
+    out = await call(client, "supplement_query", user_id=_USER_ID, message=message)
     print(out)
 
 
@@ -136,7 +150,9 @@ _ALL_TESTS = {
     "list_subtopics": test_list_subtopics,
     "generate_quiz": test_generate_quiz,
     "submit_quiz": test_submit_quiz,
-    "chat_message": test_chat_message,
+    "study_material_query": test_study_material_query,
+    "chitchat": test_chitchat,
+    "supplement_query": test_supplement_query,
     "youtube_search": test_youtube_search,
     "get_curriculum": test_get_curriculum,
     "list_tools": test_list_tools,
@@ -154,7 +170,9 @@ async def run_all(server_url: str) -> None:
         await test_list_subtopics(client)
         await test_generate_quiz(client, subtopic_number=0)
         await test_submit_quiz(client, subtopic_number=0, answers="A,A,A")
-        await test_chat_message(client)
+        await test_study_material_query(client)
+        await test_chitchat(client)
+        await test_supplement_query(client)
         await test_youtube_search(client)
     print("\n[test] All tests completed.")
 
