@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Flight Tracking Integration — sandbox network policy (Tier-1).
+#
+# Architecture: the sandbox does NOT talk to opensky-network.org,
+# nasstatus.faa.gov, or aviationweather.gov directly. Two host-side
+# Python daemons handle the upstreams the sandbox can't reach itself:
+#
+#   * opensky-proxy.py  (host:9202)  — auth-aware OAuth2 forwarder for
+#     OpenSky Network. Holds OPENSKY_CLIENT_ID/SECRET on the host
+#     so the sandbox never sees them. Mirrors the planet-proxy
+#     tier-1 pattern.
+#
+#   * faa-proxy.py      (host:9203)  — auth-less forwarder for FAA /
+#     NWS public feeds (NAS Status, Aviation Weather Center). These
+#     endpoints reject requests from the cloud ASN that the openshell
+#     gateway egresses through (return 403 Forbidden), so we IP-rewrap
+#     them through the host VM.
+#
+# install.sh dynamically substitutes <HOST_IP> with the brev VM's
+# primary address before applying this policy. The template below is
+# a reference shape; the real on-the-wire policy uses the rendered IP.
+#
+# Other allowed upstreams (reachable directly from the sandbox):
+#   - services6.arcgis.com:443  (FAA AIS Special Use + Class airspace)
+#   - tfr.faa.gov:443           (FAA Temporary Flight Restrictions WFS)
+#
+# Inference traffic (api -> Nemotron) is governed by OpenShell's
+# gateway-managed inference route (`openshell inference set`), so it
+# isn't declared here. Static map tiles are fetched directly by the
+# user's browser via the openshell port-forward; the sandbox itself
+# does not need access to the tile server.
+
+network_policies:
+  flight_tracking_opensky:
+    name: flight_tracking_opensky
+    endpoints:
+      # Tier-1 host proxy for OpenSky. <HOST_IP> is rendered by install.sh.
+      - host: <HOST_IP>
+        port: 9202
+        protocol: rest
+        enforcement: enforce
+        tls: passthrough
+        rules:
+          - allow: { method: GET, path: "/api/states/all*" }
+          - allow: { method: GET, path: "/api/flights/aircraft*" }
+          - allow: { method: GET, path: "/api/tracks/all*" }
+          - allow: { method: GET, path: "/health" }
+      # Tier-1 host proxy for FAA public feeds (NAS Status + AWC METAR).
+      # See faa-proxy.py — same <HOST_IP>, different port.
+      - host: <HOST_IP>
+        port: 9203
+        protocol: rest
+        enforcement: enforce
+        tls: passthrough
+        rules:
+          - allow: { method: GET, path: "/nas/api/airport-events*" }
+          - allow: { method: GET, path: "/awc/api/data/metar*" }
+          - allow: { method: GET, path: "/health" }
+      # FAA Aeronautical Information Services (AIS) ArcGIS REST endpoint.
+      # Every layer the app ships from this host is a `FeatureServer/0/query`
+      # under a different feature service name. Listing each one explicitly
+      # (rather than a wildcard middle segment) keeps the policy as the
+      # authoritative inventory of "what FAA datasets does this app pull".
+      - host: services6.arcgis.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        tls: terminate
+        rules:
+          - allow: { method: GET, path: "/ssFJjBXIUyZDrSYZ/ArcGIS/rest/services/Special_Use_Airspace/FeatureServer/0/query*" }
+          - allow: { method: GET, path: "/ssFJjBXIUyZDrSYZ/ArcGIS/rest/services/Class_Airspace/FeatureServer/0/query*" }
+          - allow: { method: GET, path: "/ssFJjBXIUyZDrSYZ/ArcGIS/rest/services/Boundary_Airspace/FeatureServer/0/query*" }     # ARTCC + FIR boundaries
+          - allow: { method: GET, path: "/ssFJjBXIUyZDrSYZ/ArcGIS/rest/services/AM_Runway/FeatureServer/0/query*" }              # Airport runway polygons
+          - allow: { method: GET, path: "/ssFJjBXIUyZDrSYZ/ArcGIS/rest/services/AM_Taxiway/FeatureServer/0/query*" }             # Airport taxiway polygons
+          - allow: { method: GET, path: "/ssFJjBXIUyZDrSYZ/ArcGIS/rest/services/Digital_Obstacle_File/FeatureServer/0/query*" }  # FAA DOF point obstacles
+          - allow: { method: GET, path: "/ssFJjBXIUyZDrSYZ/ArcGIS/rest/services/ATS_Route/FeatureServer/0/query*" }              # Airways (V/J routes)
+          - allow: { method: GET, path: "/ssFJjBXIUyZDrSYZ/ArcGIS/rest/services/NAVAIDSystem/FeatureServer/0/query*" }           # VOR/DME/TACAN/NDB/ILS
+      - host: tfr.faa.gov
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        tls: terminate
+        rules:
+          - allow: { method: GET, path: "/geoserver/TFR/ows*" }
+    binaries:
+      - { path: /usr/bin/python3 }
+      - { path: /usr/bin/python3.11 }
