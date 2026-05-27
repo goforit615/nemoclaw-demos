@@ -350,8 +350,14 @@ with open('$CONFIG_UPLOAD/credentials.json', 'w') as f:
     json.dump(creds, f, indent=2)
 "
 
-openshell sandbox upload "$SANDBOX_NAME" "$CONFIG_UPLOAD" /sandbox/.config/gogcli 2>/dev/null || \
+# Upload each file with its full destination path. Newer OpenShell
+# preserves the source basename when uploading a directory (e.g. a
+# `dir/` source lands as `dest/dir/`), which broke the previous
+# whole-directory upload. Per-file uploads work on both old and new.
+openshell sandbox upload "$SANDBOX_NAME" "$CONFIG_UPLOAD/config.json" /sandbox/.config/gogcli/config.json 2>/dev/null || \
   warn "Config upload warning (non-fatal)"
+openshell sandbox upload "$SANDBOX_NAME" "$CONFIG_UPLOAD/credentials.json" /sandbox/.config/gogcli/credentials.json 2>/dev/null || \
+  warn "Credentials upload warning (non-fatal)"
 
 # Upload gog-bin (actual binary) + gog (wrapper script)
 BIN_UPLOAD=$(mktemp -d /tmp/gogcli-bin-XXXXXX)
@@ -382,8 +388,10 @@ exec env GOG_ACCESS_TOKEN="$_TOKEN" GOG_JSON=1 \
 WRAPEOF
 chmod +x "$BIN_UPLOAD/gog"
 
-openshell sandbox upload "$SANDBOX_NAME" "$BIN_UPLOAD" /sandbox/.config/gogcli/bin 2>/dev/null || \
+openshell sandbox upload "$SANDBOX_NAME" "$BIN_UPLOAD/gog-bin" /sandbox/.config/gogcli/bin/gog-bin 2>/dev/null || \
   fail "Failed to upload gog binary to sandbox."
+openshell sandbox upload "$SANDBOX_NAME" "$BIN_UPLOAD/gog" /sandbox/.config/gogcli/bin/gog 2>/dev/null || \
+  fail "Failed to upload gog wrapper to sandbox."
 ok "gog binary + wrapper uploaded"
 
 # Latest installs use the absolute path in SKILL.md. Older sandboxes also

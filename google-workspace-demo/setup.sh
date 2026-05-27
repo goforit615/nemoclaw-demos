@@ -120,8 +120,13 @@ with open('$CONFIG_UPLOAD/credentials.json', 'w') as f:
     json.dump(creds, f, indent=2)
 "
 
-openshell sandbox upload "$SANDBOX" "$CONFIG_UPLOAD" /sandbox/.config/gogcli 2>/dev/null || \
+# Upload each file with its full destination path. Newer OpenShell
+# preserves the source basename when uploading a directory, which
+# broke whole-directory uploads. Per-file works on both old and new.
+openshell sandbox upload "$SANDBOX" "$CONFIG_UPLOAD/config.json" /sandbox/.config/gogcli/config.json 2>/dev/null || \
   warn "Config upload warning (non-fatal)"
+openshell sandbox upload "$SANDBOX" "$CONFIG_UPLOAD/credentials.json" /sandbox/.config/gogcli/credentials.json 2>/dev/null || \
+  warn "Credentials upload warning (non-fatal)"
 rm -rf "$CONFIG_UPLOAD"
 ok "Config + credentials uploaded"
 
@@ -153,8 +158,10 @@ exec env GOG_ACCESS_TOKEN="$_TOKEN" GOG_JSON=1 \
 WRAPEOF
 chmod +x "$BIN_UPLOAD/gog"
 
-openshell sandbox upload "$SANDBOX" "$BIN_UPLOAD" /sandbox/.config/gogcli/bin 2>/dev/null || \
+openshell sandbox upload "$SANDBOX" "$BIN_UPLOAD/gog-bin" /sandbox/.config/gogcli/bin/gog-bin 2>/dev/null || \
   fail "Failed to upload gog binary."
+openshell sandbox upload "$SANDBOX" "$BIN_UPLOAD/gog" /sandbox/.config/gogcli/bin/gog 2>/dev/null || \
+  fail "Failed to upload gog wrapper."
 ok "gog binary re-uploaded"
 
 # Re-deploy gog SKILL.md so OpenClaw discovers gog as a tool.
