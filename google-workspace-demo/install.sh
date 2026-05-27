@@ -442,18 +442,29 @@ if entry.get("enabled") is not True:
     entry["enabled"] = True
     changed = True
 
-# 2) Allow the runtime tools needed to actually run /sandbox/.config/gogcli/bin/gog.
-#    OpenClaw v2026.5.18+ ships in compact tool-search mode by default, which
-#    only exposes `tool_search_code`. Without `exec` (and `read` for SKILL.md
-#    lookup), the agent has no way to invoke the gog binary and ends up
-#    looping in inference until it times out.
+# 2) Surface the runtime tools the agent needs (read, write, edit, exec,
+#    process, web_*, sessions_*, etc.) by selecting the "coding" tool profile.
+#    OpenClaw v2026.5.18+ defaults to compact tool-search mode, which only
+#    shows `tool_search_code` in the system prompt. Smaller models cannot
+#    reverse-engineer the JS API of `tool_search_code` reliably and end up
+#    burning ~200k tokens guessing before they ever run gog. The "coding"
+#    profile lists `exec` as a first-class tool with a clear description so
+#    the agent invokes /sandbox/.config/gogcli/bin/gog directly on turn 1.
+#
+#    This does not weaken sandbox security: filesystem, network, and process
+#    isolation policies are unchanged. The "coding" profile is the documented
+#    OpenClaw config knob for any sandbox that needs to run binaries (it is
+#    what built-in skills like taskflow, notion, and gh-issues require).
 tools = d.setdefault("tools", {})
-needed = ["exec", "process", "read"]
-also = list(tools.get("alsoAllow") or [])
-added = [t for t in needed if t not in also]
-if added:
-    tools["alsoAllow"] = sorted(set(also + needed))
+if tools.get("profile") != "coding":
+    tools["profile"] = "coding"
     changed = True
+# Drop legacy alsoAllow/toolSearch entries from earlier installer versions so
+# the new profile is the single source of truth.
+for legacy in ("alsoAllow", "toolSearch"):
+    if legacy in tools:
+        tools.pop(legacy)
+        changed = True
 
 if changed:
     json.dump(d, open(p, "w"), indent=2)
@@ -465,11 +476,11 @@ openshell sandbox upload "$SANDBOX_NAME" "$ENABLE_SCRIPT" /tmp/gogcli-enable.py 
 rm -f "$ENABLE_SCRIPT"
 
 if optional_sandbox_exec "$SANDBOX_NAME" python3 /tmp/gogcli-enable.py; then
-  ok "gog skill enabled in OpenClaw skill registry; exec/process/read tools allowlisted"
+  ok "gog skill enabled in OpenClaw registry; tools.profile set to coding (exec available)"
 else
   warn "Could not update openclaw.json automatically (older OpenClaw or sandbox exec unavailable)"
-  warn "If the TUI hangs on Google requests, edit /sandbox/.openclaw/openclaw.json and add"
-  warn '  "tools": { "alsoAllow": ["exec", "process", "read"] }'
+  warn "If the TUI hangs on Google requests, edit /sandbox/.openclaw/openclaw.json and add:"
+  warn '  "tools":  { "profile": "coding" }'
   warn '  "skills": { "entries": { "gog": { "enabled": true } } }'
 fi
 
