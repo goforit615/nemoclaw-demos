@@ -157,15 +157,21 @@ openshell sandbox upload "$SANDBOX" "$BIN_UPLOAD" /sandbox/.config/gogcli/bin 2>
   fail "Failed to upload gog binary."
 ok "gog binary re-uploaded"
 
-# Re-upload gog SKILL.md so OpenClaw discovers gog as a tool
+# Re-deploy gog SKILL.md so OpenClaw discovers gog as a tool.
+# Prefer the validated `nemoclaw skill install` path; fall back to raw upload
+# on older NemoClaw builds that do not ship the subcommand.
 SKILL_UPLOAD=$(mktemp -d /tmp/gogcli-skill-XXXXXX)
 trap 'rm -rf "$BIN_UPLOAD" "$SKILL_UPLOAD"' EXIT
 mkdir -p "$SKILL_UPLOAD/gog"
 cp "$SCRIPT_DIR/skills/gog/SKILL.md" "$SKILL_UPLOAD/gog/SKILL.md"
 
-openshell sandbox upload "$SANDBOX" "$SKILL_UPLOAD/gog" /sandbox/.openclaw/skills/gog 2>/dev/null || \
-  warn "Skill upload warning (non-fatal)"
-ok "gog SKILL.md deployed"
+if nemoclaw "$SANDBOX" skill install "$SKILL_UPLOAD/gog" >/dev/null 2>&1; then
+  ok "gog SKILL.md registered via nemoclaw skill install"
+elif openshell sandbox upload "$SANDBOX" "$SKILL_UPLOAD/gog" /sandbox/.openclaw/skills/gog 2>/dev/null; then
+  ok "gog SKILL.md uploaded to /sandbox/.openclaw/skills/gog/ (legacy path)"
+else
+  warn "Failed to deploy gog SKILL.md; agent may not see the skill"
+fi
 
 if optional_sandbox_exec "$SANDBOX" bash -c \
   'grep -q "gogcli/bin" /sandbox/.bashrc 2>/dev/null || echo "export PATH=\"/sandbox/.config/gogcli/bin:\$PATH\"" >> /sandbox/.bashrc'; then

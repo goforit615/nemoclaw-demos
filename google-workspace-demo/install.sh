@@ -395,15 +395,22 @@ else
   warn "Could not update /sandbox/.bashrc; gog remains available at /sandbox/.config/gogcli/bin/gog"
 fi
 
-# Upload gog SKILL.md so OpenClaw discovers gog as a tool
+# Deploy gog SKILL.md so OpenClaw discovers gog as a tool.
+# Newer NemoClaw exposes `nemoclaw <sandbox> skill install`, which validates
+# the SKILL.md and registers it with the agent. Older builds only support a
+# raw upload to /sandbox/.openclaw/skills/, which is kept as the fallback.
 SKILL_UPLOAD=$(mktemp -d /tmp/gogcli-skill-XXXXXX)
 trap 'rm -rf "$CONFIG_UPLOAD" "$BIN_UPLOAD" "$SKILL_UPLOAD"' EXIT
 mkdir -p "$SKILL_UPLOAD/gog"
 cp "$SCRIPT_DIR/skills/gog/SKILL.md" "$SKILL_UPLOAD/gog/SKILL.md"
 
-openshell sandbox upload "$SANDBOX_NAME" "$SKILL_UPLOAD/gog" /sandbox/.openclaw/skills/gog 2>/dev/null || \
-  warn "Skill upload warning (non-fatal)"
-ok "gog SKILL.md deployed to /sandbox/.openclaw/skills/gog/"
+if nemoclaw "$SANDBOX_NAME" skill install "$SKILL_UPLOAD/gog" >/dev/null 2>&1; then
+  ok "gog SKILL.md registered via nemoclaw skill install"
+elif openshell sandbox upload "$SANDBOX_NAME" "$SKILL_UPLOAD/gog" /sandbox/.openclaw/skills/gog 2>/dev/null; then
+  ok "gog SKILL.md uploaded to /sandbox/.openclaw/skills/gog/ (legacy path)"
+else
+  warn "Failed to deploy gog SKILL.md; agent may not see the skill"
+fi
 
 # ─────────────────────────────────────────────────────────────────────
 # Step 7: Clean up old integration artifacts
