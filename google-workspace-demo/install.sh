@@ -414,10 +414,51 @@ cp "$SCRIPT_DIR/skills/gog/SKILL.md" "$SKILL_UPLOAD/gog/SKILL.md"
 
 if nemoclaw "$SANDBOX_NAME" skill install "$SKILL_UPLOAD/gog" >/dev/null 2>&1; then
   ok "gog SKILL.md registered via nemoclaw skill install"
-elif openshell sandbox upload "$SANDBOX_NAME" "$SKILL_UPLOAD/gog" /sandbox/.openclaw/skills/gog 2>/dev/null; then
+elif openshell sandbox upload "$SANDBOX_NAME" "$SKILL_UPLOAD/gog/SKILL.md" /sandbox/.openclaw/skills/gog/SKILL.md 2>/dev/null; then
   ok "gog SKILL.md uploaded to /sandbox/.openclaw/skills/gog/ (legacy path)"
 else
   warn "Failed to deploy gog SKILL.md; agent may not see the skill"
+fi
+
+# OpenClaw v2026.5.18+ exposes a skill registry in
+# /sandbox/.openclaw/openclaw.json and only surfaces skills that are
+# explicitly enabled. Older OpenClaw discovers any SKILL.md under
+# /sandbox/.openclaw/skills/ on its own; the patch script is a no-op
+# there because skills.entries.gog is simply absent. Upload + run via
+# the sandbox-exec helper so failures degrade gracefully.
+ENABLE_SCRIPT=$(mktemp /tmp/gogcli-enable-XXXXXX.py)
+cat > "$ENABLE_SCRIPT" << 'PYEOF'
+import json, os, sys
+p = "/sandbox/.openclaw/openclaw.json"
+if not os.path.exists(p):
+    print("openclaw.json not found; skipping registry enable", file=sys.stderr)
+    sys.exit(0)
+d = json.load(open(p))
+entry = d.setdefault("skills", {}).setdefault("entries", {}).setdefault("gog", {})
+if entry.get("enabled") is True:
+    print("gog skill already enabled")
+    sys.exit(0)
+entry["enabled"] = True
+json.dump(d, open(p, "w"), indent=2)
+print("gog skill enabled in openclaw.json")
+PYEOF
+openshell sandbox upload "$SANDBOX_NAME" "$ENABLE_SCRIPT" /tmp/gogcli-enable.py 2>/dev/null || true
+rm -f "$ENABLE_SCRIPT"
+
+if optional_sandbox_exec "$SANDBOX_NAME" python3 /tmp/gogcli-enable.py; then
+  ok "gog skill enabled in OpenClaw skill registry"
+else
+  warn "Could not enable gog in openclaw.json automatically (older OpenClaw or sandbox exec unavailable)"
+fi
+
+# Restart the OpenClaw gateway so it re-reads the skill registry.
+# Sending SIGTERM to the `openclaw` process triggers nemoclaw-start to
+# respawn it. Older OpenClaw rescans skills per session and does not
+# need this; the failure path is harmless there.
+if optional_sandbox_exec "$SANDBOX_NAME" bash -c "pkill -TERM -f '^openclaw\$' 2>/dev/null; true"; then
+  ok "OpenClaw gateway restart signaled (skills will be re-read)"
+else
+  warn "Could not signal OpenClaw gateway restart; reconnect/restart the TUI manually"
 fi
 
 # ─────────────────────────────────────────────────────────────────────
