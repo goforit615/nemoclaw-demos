@@ -23,21 +23,30 @@ Always call the `exec` tool with the full path. Example tool call:
 
 If a command fails with "unknown flag" or "unknown command", run `<that command> --help` once and read the output. Do not loop on `--help`; one help call is enough to recover.
 
+## Plan first, then call
+
+**Before any tool call, ask: "does the answer already exist in what I have?"**
+- For Gmail "show / list / summarize my latest N emails", `gmail search` returns subject + from + date for each. Stop there. Do **not** call `gmail get` or `gmail thread get` per result.
+- For Calendar "what is on my calendar", `events list` returns enough; do not fetch each event individually.
+- Only fetch a single item's body when the user explicitly asks to read or quote that one item.
+
 ## Most common one-liners
 
-These cover ~80% of asks. Copy-paste, substitute, run.
+These cover ~80% of asks. Copy-paste, substitute, run. **Stop at the first command that has enough information to answer.**
 
 ```bash
-# Gmail: show N newest inbox messages
-/sandbox/.config/gogcli/bin/gog gmail search in:inbox --max 5
-
-# Gmail: search with full Gmail query syntax
+# Gmail: list / overview — search alone returns id+date+from+subject+labels for each
+# thread. That is ENOUGH for "what are my latest emails / show me my inbox /
+# summarize my last N emails by subject". Do not call `gmail get` per item.
+/sandbox/.config/gogcli/bin/gog gmail search in:inbox --max 10
 /sandbox/.config/gogcli/bin/gog gmail search 'is:unread newer_than:1d' --max 10
 /sandbox/.config/gogcli/bin/gog gmail search 'from:alice@example.com has:attachment'
 
-# Gmail: read one message or full thread
-/sandbox/.config/gogcli/bin/gog gmail get <messageId>
-/sandbox/.config/gogcli/bin/gog gmail thread get <threadId>
+# Gmail: read ONE specific message body (only when the user asks "what does
+# email X say" or "read me email X"). ALWAYS use --sanitize-content for
+# agent consumption: it strips HTML, removes URLs, and returns a small
+# clean JSON (~1KB) instead of the raw Gmail payload (~5-10KB of noise).
+/sandbox/.config/gogcli/bin/gog gmail thread get <threadId> --sanitize-content
 
 # Gmail: send (use --body-html for formatting)
 /sandbox/.config/gogcli/bin/gog gmail send --to a@co.com --subject "Hi" --body-html "<p>Hello</p>"
@@ -66,19 +75,47 @@ These cover ~80% of asks. Copy-paste, substitute, run.
 /sandbox/.config/gogcli/bin/gog me
 ```
 
-## Recipes
+## Recipes (do this, not that)
 
-**"Summarize my last N emails"**
-1. `gog gmail search in:inbox --max N` → get list of thread/message ids
-2. For the top items, optionally `gog gmail get <messageId>` to fetch body, then summarize.
-3. Do **not** call `--help` on subcommands you have already used in this session.
+**"What are my latest N emails / show me my inbox / summarize my last N emails"**
+- **One** call: `gog gmail search in:inbox --max N`. The response already contains
+  subject, from, date, and labels per thread — that is enough to summarize.
+- **DO NOT** loop `gog gmail thread get <id>` for each result. That turns one
+  fast call into N slow calls and floods context with header noise.
+
+**"Summarize THAT email" / "read me email X in detail"**
+- One `gog gmail thread get <id> --sanitize-content` for the specific id. Read
+  the `body` field; ignore `payload.headers` (it is just SMTP metadata).
+
+**"Find emails about <topic> and tell me the key points"**
+- `gog gmail search '<topic>' --max 5` to pick candidates from subjects.
+- Then `gog gmail thread get <id> --sanitize-content` only for the 1-2 most
+  relevant; do not fetch all matches.
 
 **"Send an email to X about Y"**
-1. Compose subject + html body in your head.
-2. One `gog gmail send --to X --subject "…" --body-html "<p>…</p>"` call. Done.
+- One `gog gmail send --to X --subject "…" --body-html "<p>…</p>"` call. Done.
+- No discovery calls needed first.
 
-**"What's on my calendar today?"**
-1. `gog calendar events list --time-min now --time-max +1d` → summarize.
+**"What's on my calendar today / this week?"**
+- One `gog calendar events list --time-min now --time-max +1d` (or `+7d`). Summarize.
+
+## Output-size rules of thumb
+
+- `gmail search` → small (~1-2KB for 10 results). Always safe.
+- `gmail thread get <id> --sanitize-content` → small (~1KB per message). Use for bodies.
+- `gmail thread get <id>` (no flags) → large (~5-10KB, includes raw SMTP headers). Avoid.
+- `gmail get <id>` → large (~5-10KB raw payload). Prefer `thread get --sanitize-content`.
+- `--results-only` strips envelope fields like `nextPageToken` from any JSON command.
+
+## Help discovery
+
+- `gog --help`, then `gog <area> --help` (e.g. `gog gmail --help`). One level of help is enough; do not recurse on subcommands you have already used successfully in this session.
+
+## Notes
+
+- Tokens auto-rotate; if a call returns `401`/`unauthorized`, wait ~5s and retry **once** before reporting failure (the push daemon refreshes every ~55 min plus on demand).
+- `gog` prints a harmless `cannot create /proc/self/oom_score_adj: Permission denied` line on stderr inside the sandbox — ignore it, the JSON on stdout is correct.
+- This binary talks to Google APIs only. Network egress for other hosts is blocked by sandbox policy.
 
 ## Notes
 
