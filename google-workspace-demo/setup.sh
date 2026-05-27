@@ -191,21 +191,43 @@ if not os.path.exists(p):
     print("openclaw.json not found; skipping registry enable", file=sys.stderr)
     sys.exit(0)
 d = json.load(open(p))
+changed = False
+
+# 1) Enable the gog skill in the registry so the agent surfaces SKILL.md.
 entry = d.setdefault("skills", {}).setdefault("entries", {}).setdefault("gog", {})
-if entry.get("enabled") is True:
-    print("gog skill already enabled")
-    sys.exit(0)
-entry["enabled"] = True
-json.dump(d, open(p, "w"), indent=2)
-print("gog skill enabled in openclaw.json")
+if entry.get("enabled") is not True:
+    entry["enabled"] = True
+    changed = True
+
+# 2) Allow the runtime tools needed to actually run /sandbox/.config/gogcli/bin/gog.
+#    OpenClaw v2026.5.18+ ships in compact tool-search mode by default, which
+#    only exposes `tool_search_code`. Without `exec` (and `read` for SKILL.md
+#    lookup), the agent has no way to invoke the gog binary and ends up
+#    looping in inference until it times out.
+tools = d.setdefault("tools", {})
+needed = ["exec", "process", "read"]
+also = list(tools.get("alsoAllow") or [])
+added = [t for t in needed if t not in also]
+if added:
+    tools["alsoAllow"] = sorted(set(also + needed))
+    changed = True
+
+if changed:
+    json.dump(d, open(p, "w"), indent=2)
+    print("openclaw.json updated: gog enabled and exec tools allowed")
+else:
+    print("openclaw.json already configured for gog")
 PYEOF
 openshell sandbox upload "$SANDBOX" "$ENABLE_SCRIPT" /tmp/gogcli-enable.py 2>/dev/null || true
 rm -f "$ENABLE_SCRIPT"
 
 if optional_sandbox_exec "$SANDBOX" python3 /tmp/gogcli-enable.py; then
-  ok "gog skill enabled in OpenClaw skill registry"
+  ok "gog skill enabled in OpenClaw skill registry; exec/process/read tools allowlisted"
 else
-  warn "Could not enable gog in openclaw.json automatically (older OpenClaw or sandbox exec unavailable)"
+  warn "Could not update openclaw.json automatically (older OpenClaw or sandbox exec unavailable)"
+  warn "If the TUI hangs on Google requests, edit /sandbox/.openclaw/openclaw.json and add"
+  warn '  "tools": { "alsoAllow": ["exec", "process", "read"] }'
+  warn '  "skills": { "entries": { "gog": { "enabled": true } } }'
 fi
 
 if optional_sandbox_exec "$SANDBOX" bash -c "pkill -TERM -f '^openclaw\$' 2>/dev/null; true"; then
