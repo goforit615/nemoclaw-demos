@@ -22,6 +22,20 @@ ok()    { echo -e "${GREEN}  ✓ $1${NC}"; }
 warn()  { echo -e "${YELLOW}  ⚠ $1${NC}"; }
 fail()  { echo -e "${RED}  ✗ $1${NC}"; exit 1; }
 
+# Compatibility wrapper for optional legacy sandbox tweaks. Some newer
+# OpenShell builds make sandbox exec hang or expose /sandbox/.bashrc as
+# read-only, while older NemoClaw/OpenShell installs support these steps.
+optional_sandbox_exec() {
+  local sandbox="$1"
+  shift
+
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 15s openshell sandbox exec -n "$sandbox" --no-tty --timeout 10 -- "$@" >/dev/null 2>&1
+  else
+    openshell sandbox exec -n "$sandbox" --no-tty --timeout 10 -- "$@" >/dev/null 2>&1
+  fi
+}
+
 SANDBOX=${1:-}
 if [ -z "$SANDBOX" ]; then
   SANDBOX=$(python3 -c "
@@ -106,8 +120,13 @@ with open('$CONFIG_UPLOAD/credentials.json', 'w') as f:
     json.dump(creds, f, indent=2)
 "
 
-openshell sandbox upload "$SANDBOX" "$CONFIG_UPLOAD" /sandbox/.config/gogcli 2>/dev/null || \
+# Upload each file with its full destination path. Newer OpenShell
+# preserves the source basename when uploading a directory, which
+# broke whole-directory uploads. Per-file works on both old and new.
+openshell sandbox upload "$SANDBOX" "$CONFIG_UPLOAD/config.json" /sandbox/.config/gogcli/config.json 2>/dev/null || \
   warn "Config upload warning (non-fatal)"
+openshell sandbox upload "$SANDBOX" "$CONFIG_UPLOAD/credentials.json" /sandbox/.config/gogcli/credentials.json 2>/dev/null || \
+  warn "Credentials upload warning (non-fatal)"
 rm -rf "$CONFIG_UPLOAD"
 ok "Config + credentials uploaded"
 
@@ -139,23 +158,101 @@ exec env GOG_ACCESS_TOKEN="$_TOKEN" GOG_JSON=1 \
 WRAPEOF
 chmod +x "$BIN_UPLOAD/gog"
 
-openshell sandbox upload "$SANDBOX" "$BIN_UPLOAD" /sandbox/.config/gogcli/bin 2>/dev/null || \
+openshell sandbox upload "$SANDBOX" "$BIN_UPLOAD/gog-bin" /sandbox/.config/gogcli/bin/gog-bin 2>/dev/null || \
   fail "Failed to upload gog binary."
+openshell sandbox upload "$SANDBOX" "$BIN_UPLOAD/gog" /sandbox/.config/gogcli/bin/gog 2>/dev/null || \
+  fail "Failed to upload gog wrapper."
 ok "gog binary re-uploaded"
 
-# Re-upload gog SKILL.md so OpenClaw discovers gog as a tool
+# Re-deploy gog SKILL.md so OpenClaw discovers gog as a tool.
+# Prefer the validated `nemoclaw skill install` path; fall back to raw upload
+# on older NemoClaw builds that do not ship the subcommand.
 SKILL_UPLOAD=$(mktemp -d /tmp/gogcli-skill-XXXXXX)
 trap 'rm -rf "$BIN_UPLOAD" "$SKILL_UPLOAD"' EXIT
 mkdir -p "$SKILL_UPLOAD/gog"
 cp "$SCRIPT_DIR/skills/gog/SKILL.md" "$SKILL_UPLOAD/gog/SKILL.md"
 
-openshell sandbox upload "$SANDBOX" "$SKILL_UPLOAD/gog" /sandbox/.openclaw/skills/gog 2>/dev/null || \
-  warn "Skill upload warning (non-fatal)"
-ok "gog SKILL.md deployed"
+if nemoclaw "$SANDBOX" skill install "$SKILL_UPLOAD/gog" >/dev/null 2>&1; then
+  ok "gog SKILL.md registered via nemoclaw skill install"
+elif openshell sandbox upload "$SANDBOX" "$SKILL_UPLOAD/gog/SKILL.md" /sandbox/.openclaw/skills/gog/SKILL.md 2>/dev/null; then
+  ok "gog SKILL.md uploaded to /sandbox/.openclaw/skills/gog/ (legacy path)"
+else
+  warn "Failed to deploy gog SKILL.md; agent may not see the skill"
+fi
 
-openshell sandbox exec -n "$SANDBOX" -- bash -c \
-  'grep -q "gogcli/bin" /sandbox/.bashrc 2>/dev/null || echo "export PATH=\"/sandbox/.config/gogcli/bin:\$PATH\"" >> /sandbox/.bashrc' 2>/dev/null
-ok "PATH verified"
+# OpenClaw v2026.5.18+ requires the skill to be enabled in
+# /sandbox/.openclaw/openclaw.json's skills.entries registry and the
+# gateway to be restarted before it surfaces a newly installed skill.
+ENABLE_SCRIPT=$(mktemp /tmp/gogcli-enable-XXXXXX.py)
+cat > "$ENABLE_SCRIPT" << 'PYEOF'
+import json, os, sys
+p = "/sandbox/.openclaw/openclaw.json"
+if not os.path.exists(p):
+    print("openclaw.json not found; skipping registry enable", file=sys.stderr)
+    sys.exit(0)
+d = json.load(open(p))
+changed = False
+
+# 1) Enable the gog skill in the registry so the agent surfaces SKILL.md.
+entry = d.setdefault("skills", {}).setdefault("entries", {}).setdefault("gog", {})
+if entry.get("enabled") is not True:
+    entry["enabled"] = True
+    changed = True
+
+# 2) Surface the runtime tools the agent needs (read, write, edit, exec,
+#    process, web_*, sessions_*, etc.) by selecting the "coding" tool profile.
+#    OpenClaw v2026.5.18+ defaults to compact tool-search mode, which only
+#    shows `tool_search_code` in the system prompt. Smaller models cannot
+#    reverse-engineer the JS API of `tool_search_code` reliably and end up
+#    burning ~200k tokens guessing before they ever run gog. The "coding"
+#    profile lists `exec` as a first-class tool with a clear description so
+#    the agent invokes /sandbox/.config/gogcli/bin/gog directly on turn 1.
+#
+#    This does not weaken sandbox security: filesystem, network, and process
+#    isolation policies are unchanged. The "coding" profile is the documented
+#    OpenClaw config knob for any sandbox that needs to run binaries (it is
+#    what built-in skills like taskflow, notion, and gh-issues require).
+tools = d.setdefault("tools", {})
+if tools.get("profile") != "coding":
+    tools["profile"] = "coding"
+    changed = True
+# Drop legacy alsoAllow/toolSearch entries from earlier installer versions so
+# the new profile is the single source of truth.
+for legacy in ("alsoAllow", "toolSearch"):
+    if legacy in tools:
+        tools.pop(legacy)
+        changed = True
+
+if changed:
+    json.dump(d, open(p, "w"), indent=2)
+    print("openclaw.json updated: gog enabled and exec tools allowed")
+else:
+    print("openclaw.json already configured for gog")
+PYEOF
+openshell sandbox upload "$SANDBOX" "$ENABLE_SCRIPT" /tmp/gogcli-enable.py 2>/dev/null || true
+rm -f "$ENABLE_SCRIPT"
+
+if optional_sandbox_exec "$SANDBOX" python3 /tmp/gogcli-enable.py; then
+  ok "gog skill enabled in OpenClaw registry; tools.profile set to coding (exec available)"
+else
+  warn "Could not update openclaw.json automatically (older OpenClaw or sandbox exec unavailable)"
+  warn "If the TUI hangs on Google requests, edit /sandbox/.openclaw/openclaw.json and add:"
+  warn '  "tools":  { "profile": "coding" }'
+  warn '  "skills": { "entries": { "gog": { "enabled": true } } }'
+fi
+
+if optional_sandbox_exec "$SANDBOX" bash -c "pkill -TERM -f '^openclaw\$' 2>/dev/null; true"; then
+  ok "OpenClaw gateway restart signaled (skills will be re-read)"
+else
+  warn "Could not signal OpenClaw gateway restart; reconnect/restart the TUI manually"
+fi
+
+if optional_sandbox_exec "$SANDBOX" bash -c \
+  'grep -q "gogcli/bin" /sandbox/.bashrc 2>/dev/null || echo "export PATH=\"/sandbox/.config/gogcli/bin:\$PATH\"" >> /sandbox/.bashrc'; then
+  ok "PATH verified"
+else
+  warn "Could not update /sandbox/.bashrc; gog remains available at /sandbox/.config/gogcli/bin/gog"
+fi
 
 # ── Re-apply network policy ──────────────────────────────────────────
 
@@ -399,9 +496,12 @@ ok "Policy applied (gmail + calendar + drive + docs + sheets + contacts + tasks)
 # ── Clear sessions ───────────────────────────────────────────────────
 
 info "Clearing sessions..."
-openshell sandbox exec -n "$SANDBOX" -- bash -c \
-  "[ -f $SESSIONS_PATH ] && echo '{}' > $SESSIONS_PATH || true" 2>/dev/null
-ok "Sessions cleared"
+if optional_sandbox_exec "$SANDBOX" bash -c \
+  "[ -f $SESSIONS_PATH ] && echo '{}' > $SESSIONS_PATH || true"; then
+  ok "Sessions cleared"
+else
+  warn "Could not clear sessions via sandbox exec; reconnect if the agent does not pick up the skill"
+fi
 
 echo ""
 echo -e "${GREEN}  Re-deploy complete.${NC}"

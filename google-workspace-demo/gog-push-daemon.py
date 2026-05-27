@@ -94,17 +94,29 @@ def get_sandbox_id(name, openshell_bin):
 
 
 def push_token(name, token, expiry_ts, openshell_bin):
-    """Write token + expiry to temp dir and upload into sandbox."""
+    """Write token + expiry to temp files and upload each into sandbox.
+
+    Newer OpenShell preserves the source basename when uploading a
+    directory (e.g. ``upload tmp/ dest/`` lands as ``dest/tmp/...``),
+    which broke the previous whole-directory push. Uploading each file
+    with its full destination path works on both old and new versions.
+    """
     tmp = tempfile.mkdtemp(prefix="gog-token-")
     try:
-        with open(os.path.join(tmp, "access_token"), "w") as f:
+        token_path = os.path.join(tmp, "access_token")
+        expiry_path = os.path.join(tmp, "token_expiry")
+        with open(token_path, "w") as f:
             f.write(token)
-        with open(os.path.join(tmp, "token_expiry"), "w") as f:
+        with open(expiry_path, "w") as f:
             f.write(str(int(expiry_ts)))
-        subprocess.run(
-            [openshell_bin, "sandbox", "upload", name, tmp, SANDBOX_TOKEN_DIR],
-            check=True, capture_output=True, text=True,
-        )
+        for local, remote in (
+            (token_path, f"{SANDBOX_TOKEN_DIR}/access_token"),
+            (expiry_path, f"{SANDBOX_TOKEN_DIR}/token_expiry"),
+        ):
+            subprocess.run(
+                [openshell_bin, "sandbox", "upload", name, local, remote],
+                check=True, capture_output=True, text=True,
+            )
         log.info("Token pushed to sandbox '%s', expires %s", name, time.ctime(expiry_ts))
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"openshell sandbox upload failed: {e.stderr.strip()}") from e

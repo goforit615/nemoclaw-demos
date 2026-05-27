@@ -1,321 +1,226 @@
 ---
 name: gog
-description: "Google Workspace CLI at /sandbox/.config/gogcli/bin/gog. Use when: user asks about email, inbox, send email, reply, drafts, archive, calendar events, schedule meetings, check availability, RSVP, focus time, out of office, Drive files, upload, download, share, Google Docs, read document, write document, edit doc, Google Sheets, read spreadsheet, write cells, contacts, lookup, tasks, to-do list. Covers Gmail, Calendar, Drive, Docs, Sheets, Contacts, Tasks. Run as: /sandbox/.config/gogcli/bin/gog <subcommand>."
+description: |
+  Google Workspace via the gog CLI. Use for Gmail (email/inbox/send/reply/drafts),
+  Calendar (events/meetings/availability/RSVP/focus time/OOO), Drive (files/upload/
+  download/share), Docs (create/read/write), Sheets (create/read/write/append),
+  Contacts, Tasks. Invoke with the `exec` tool. Binary:
+  `/sandbox/.config/gogcli/bin/gog` (auto-authed via host-side push daemon).
+  All output is JSON on stdout.
+
+  FAST PATH — go straight to the right command, do not pre-explore:
+  - "show/list/summarize my last N emails":
+      ONE call: `exec /sandbox/.config/gogcli/bin/gog gmail search in:inbox --max N`
+      Result already has id, date, from, subject, labels per thread — enough to
+      summarize. DO NOT loop `gmail get` per result.
+  - "read/summarize THAT one email":
+      `exec /sandbox/.config/gogcli/bin/gog gmail thread get <id> --sanitize-content`
+      (strips HTML, removes URLs, drops raw SMTP payload — ~1 KB clean JSON).
+  - "send an email":
+      `exec /sandbox/.config/gogcli/bin/gog gmail send --to a@b.com --subject "S" --body-html "<p>...</p>"`
+  - "reply to that email":
+      `... gmail send --reply-to-message-id <id> --body "..."` (add `--reply-all` to copy everyone).
+  - "what's on my calendar today / this week":
+      `exec /sandbox/.config/gogcli/bin/gog calendar events primary --today`
+      (other shortcuts: `--tomorrow`, `--week`, `--days N`, or `--from <RFC3339> --to <RFC3339>`).
+  - "schedule a meeting":
+      `... gog calendar create primary --summary "Sync" --from "2026-05-28T14:00:00-04:00" --to "2026-05-28T14:30:00-04:00" --attendees a@co.com,b@co.com`
+  - "create a Google Doc / Sheet from scratch":
+      `... gog docs create "Title"` (returns id + webViewLink)
+      `... gog sheets create "Title"`
+  - "upload a file to Drive (optionally as a native Google Doc/Sheet)":
+      `... gog drive upload /tmp/file.pdf` (binary upload)
+      `... gog drive upload /tmp/notes.md --name "Notes" --convert` (convert to Google Doc)
+  - "read a Google Doc as text" / "read cells from a Sheet":
+      `... gog docs cat <docId>` / `... gog sheets get <sheetId> "A1:D10"`
+
+  DO NOT:
+  - Call `memory_search` first — Gmail/Calendar/Drive data does not live in memory.
+  - Call `gog --help`, `gog status`, or `gog <area> --help` before your first real
+    command. Only run `<that command> --help` if a call fails with "unknown flag".
+  - Call `gog gmail get` per item in a list — use the `search` output you already have.
+
+  Auth notes: tokens auto-rotate; if a call returns 401, retry once after ~5s.
+  The harmless `cannot create /proc/self/oom_score_adj: Permission denied` line on
+  stderr can be ignored; the JSON on stdout is the answer. If a Google API returns
+  "API is not enabled" (e.g. Docs API), the OAuth client needs that API enabled in
+  Google Cloud Console — surface the error to the user, don't retry.
 ---
 
-# gog -- Google Workspace CLI
+# gog — Google Workspace CLI
 
-Access Gmail, Google Calendar, Google Drive, Google Docs, Google Sheets, Google Contacts, and Google Tasks.
-All commands output JSON. Binary: `/sandbox/.config/gogcli/bin/gog`.
+> **Tool to use:** `exec`
+> **Binary:** `/sandbox/.config/gogcli/bin/gog` (always use the full path; not on `$PATH`)
+> **Output:** JSON on stdout. Parse it directly.
+> **Auth:** access token is auto-rotated by a host-side push daemon; no auth steps needed.
 
-## Shortcuts
+## How to call it
 
-These top-level aliases save typing for the most common actions:
+Always call the `exec` tool with the full path. Example tool call:
 
-```bash
-/sandbox/.config/gogcli/bin/gog send --to a@co.com --subject "Hi" --body-html "<p>Hello</p>"   # gmail send
-/sandbox/.config/gogcli/bin/gog ls                            # drive ls
-/sandbox/.config/gogcli/bin/gog search "quarterly report"     # drive search
-/sandbox/.config/gogcli/bin/gog download <fileId>             # drive download
-/sandbox/.config/gogcli/bin/gog upload /tmp/file.pdf          # drive upload
-/sandbox/.config/gogcli/bin/gog me                            # show your Google profile
+```json
+{
+  "tool": "exec",
+  "input": { "command": "/sandbox/.config/gogcli/bin/gog gmail search in:inbox --max 5" }
+}
 ```
 
-## When to Use
+If a command fails with "unknown flag" or "unknown command", run `<that command> --help` once and read the output. Do not loop on `--help`.
 
-- "Check my email" / "Do I have unread messages?"
-- "Search my email for messages from X"
-- "Send an email to X about Y" / "Reply to that email"
-- "Draft an email to X" / "Archive that message"
-- "What's on my calendar today?"
-- "Schedule a meeting with X on Friday at 2pm"
-- "Am I free tomorrow between 2-4pm?"
-- "Set focus time Thursday afternoon"
-- "Upload this file to Drive" / "Share it with X"
-- "Read the contents of this Google Doc"
-- "Create a Google Doc with these notes"
-- "Find and replace 'old text' with 'new text' in the doc"
-- "Read cells A1:D10 from the budget spreadsheet"
-- "Add a row to the sales tracker sheet"
-- "Look up Sarah's email in my contacts"
-- "Create a task to follow up with the client"
+## Plan first, then call
 
-## Gmail
+**Before any tool call, ask: "does the answer already exist in what I have?"**
+- For Gmail "show / list / summarize my latest N emails", `gmail search` returns subject + from + date per thread. Stop there. Do **not** call `gmail get` per result.
+- For Calendar "what is on my calendar", `events list` returns enough; do not fetch each event individually.
+- Only fetch a single item's body when the user explicitly asks to read or quote that one item.
+
+## Most common one-liners (verified)
 
 ```bash
-# Search inbox (full Gmail query syntax)
-/sandbox/.config/gogcli/bin/gog gmail search 'is:unread'
-/sandbox/.config/gogcli/bin/gog gmail search 'from:boss@company.com newer_than:7d'
-/sandbox/.config/gogcli/bin/gog gmail search 'subject:"invoice" has:attachment' --max 10
+# ---------- Gmail ----------
+# List / overview — search alone returns id+date+from+subject+labels per thread.
+# That is enough for "what are my latest emails / summarize my last N by subject".
+/sandbox/.config/gogcli/bin/gog gmail search in:inbox --max 10
+/sandbox/.config/gogcli/bin/gog gmail search 'is:unread newer_than:1d' --max 10
+/sandbox/.config/gogcli/bin/gog gmail search 'from:alice@example.com has:attachment'
 
-# Read a specific message
-/sandbox/.config/gogcli/bin/gog gmail get <messageId>
+# Read ONE specific message body (use --sanitize-content for ~1 KB clean output)
+/sandbox/.config/gogcli/bin/gog gmail thread get <threadId> --sanitize-content
 
-# Read a full thread (all messages)
-/sandbox/.config/gogcli/bin/gog gmail thread get <threadId>
-
-# Send email (use --body-html for proper formatting)
-/sandbox/.config/gogcli/bin/gog gmail send --to recipient@example.com --subject "Subject" --body-html "<p>Message body here.</p>"
-
-# Send with CC, BCC
-/sandbox/.config/gogcli/bin/gog gmail send --to a@co.com --cc b@co.com --bcc c@co.com --subject "Update" --body-html "<p>See below.</p>"
-
-# Send with attachment
+# Send
+/sandbox/.config/gogcli/bin/gog gmail send --to a@co.com --subject "Hi" --body-html "<p>Hello</p>"
+/sandbox/.config/gogcli/bin/gog gmail send --to a@co.com --cc b@co.com --bcc c@co.com --subject "Update" --body "Plain text"
 /sandbox/.config/gogcli/bin/gog gmail send --to user@example.com --subject "Report" --body "See attached" --attach /tmp/file.pdf
 
-# Reply to a message (preserves thread)
-/sandbox/.config/gogcli/bin/gog gmail send --reply-to-message-id <messageId> --subject "Re: Topic" --body "Thanks!"
-
-# Reply all
-/sandbox/.config/gogcli/bin/gog gmail send --thread-id <threadId> --reply-all --subject "Re: Topic" --body "Agreed"
-
-# Send HTML email
-/sandbox/.config/gogcli/bin/gog gmail send --to a@co.com --subject "Styled" --body-html "<h1>Hello</h1><p>Rich content</p>"
+# Reply (in-thread, preserves headers)
+/sandbox/.config/gogcli/bin/gog gmail send --reply-to-message-id <messageId> --body "Thanks"
+/sandbox/.config/gogcli/bin/gog gmail send --thread-id <threadId> --reply-all --body "Agreed"
 
 # Drafts
 /sandbox/.config/gogcli/bin/gog gmail drafts list
 /sandbox/.config/gogcli/bin/gog gmail drafts create --to a@co.com --subject "Draft" --body "WIP"
-/sandbox/.config/gogcli/bin/gog gmail drafts send <draftId>
 
 # Organize
 /sandbox/.config/gogcli/bin/gog gmail archive <messageId>
 /sandbox/.config/gogcli/bin/gog gmail mark-read <messageId>
-/sandbox/.config/gogcli/bin/gog gmail unread <messageId>
 /sandbox/.config/gogcli/bin/gog gmail trash <messageId>
 
-# Labels
-/sandbox/.config/gogcli/bin/gog gmail labels list
+# ---------- Calendar ----------
+# List events — natural-language time windows
+/sandbox/.config/gogcli/bin/gog calendar events primary --today
+/sandbox/.config/gogcli/bin/gog calendar events primary --tomorrow
+/sandbox/.config/gogcli/bin/gog calendar events primary --week
+/sandbox/.config/gogcli/bin/gog calendar events primary --days 14
+# Explicit window (RFC3339, dates also accepted)
+/sandbox/.config/gogcli/bin/gog calendar events primary --from "2026-05-28" --to "2026-06-04"
 
-# Download attachment
-/sandbox/.config/gogcli/bin/gog gmail attachment <messageId> <attachmentId>
-
-# List attachments in a thread
-/sandbox/.config/gogcli/bin/gog gmail thread attachments <threadId>
-```
-
-## Calendar
-
-```bash
-# List upcoming events (all calendars)
-/sandbox/.config/gogcli/bin/gog calendar events list
-/sandbox/.config/gogcli/bin/gog calendar events list --max 5
-
-# List calendars
-/sandbox/.config/gogcli/bin/gog calendar calendars
-
-# Search events by keyword
-/sandbox/.config/gogcli/bin/gog calendar search "standup"
-
-# Create event with attendees
+# Create event (note: --from / --to, NOT --start / --end)
 /sandbox/.config/gogcli/bin/gog calendar create primary \
-  --title "Team standup" \
-  --start "2026-04-10T09:00:00" \
-  --duration 30m \
-  --attendees "alice@co.com,bob@co.com"
+  --summary "Project sync" \
+  --from "2026-05-28T14:00:00-04:00" --to "2026-05-28T14:30:00-04:00" \
+  --attendees a@co.com,b@co.com \
+  --description "Weekly status" \
+  --location "Zoom"
 
-# Update an event
-/sandbox/.config/gogcli/bin/gog calendar update primary <eventId> --title "New title"
+# All-day event
+/sandbox/.config/gogcli/bin/gog calendar create primary --summary "Holiday" --from "2026-07-04" --to "2026-07-05" --all-day
 
-# Delete an event
-/sandbox/.config/gogcli/bin/gog calendar delete primary <eventId>
+# Focus time / OOO / availability
+/sandbox/.config/gogcli/bin/gog calendar focus-time --from "2026-05-29T13:00:00-04:00" --to "2026-05-29T15:00:00-04:00"
+/sandbox/.config/gogcli/bin/gog calendar out-of-office --from "2026-06-10" --to "2026-06-12"
+/sandbox/.config/gogcli/bin/gog calendar freebusy --from "2026-05-28T09:00" --to "2026-05-28T17:00"
 
-# Check availability (free/busy)
-/sandbox/.config/gogcli/bin/gog calendar freebusy colleague@company.com
+# Get / delete / respond
+/sandbox/.config/gogcli/bin/gog calendar event primary <eventId>
+/sandbox/.config/gogcli/bin/gog calendar delete primary <eventId> -y
+/sandbox/.config/gogcli/bin/gog calendar respond primary <eventId> --response accepted
 
-# Find scheduling conflicts
-/sandbox/.config/gogcli/bin/gog calendar conflicts
-
-# RSVP to an invitation
-/sandbox/.config/gogcli/bin/gog calendar respond primary <eventId> --status accepted
-
-# Create focus time block
-/sandbox/.config/gogcli/bin/gog calendar focus-time --from "2026-04-10T14:00:00" --to "2026-04-10T17:00:00"
-
-# Set out of office
-/sandbox/.config/gogcli/bin/gog calendar out-of-office --from "2026-04-14" --to "2026-04-18"
-
-# Set working location
-/sandbox/.config/gogcli/bin/gog calendar working-location --from "2026-04-10" --to "2026-04-10" --type home
-```
-
-## Drive
-
-```bash
-# List files
+# ---------- Drive ----------
 /sandbox/.config/gogcli/bin/gog drive ls
-/sandbox/.config/gogcli/bin/gog drive ls <folderId>
+/sandbox/.config/gogcli/bin/gog drive search "quarterly report"
+/sandbox/.config/gogcli/bin/gog drive download <fileId> --out /tmp/file.pdf
+/sandbox/.config/gogcli/bin/gog drive upload /tmp/file.pdf
+# Upload a local markdown file as a native Google Doc:
+/sandbox/.config/gogcli/bin/gog drive upload /tmp/notes.md --name "Project notes" --convert
+# Convert to a specific Google format (doc|sheet|slides):
+/sandbox/.config/gogcli/bin/gog drive upload /tmp/data.csv --convert-to sheet
+# Folders, share, delete
+/sandbox/.config/gogcli/bin/gog drive mkdir "Reports"
+/sandbox/.config/gogcli/bin/gog drive share <fileId> --role reader --type user --email a@co.com
+/sandbox/.config/gogcli/bin/gog drive delete <fileId> -y
 
-# Search files
-/sandbox/.config/gogcli/bin/gog drive search "Q1 report"
+# ---------- Docs (requires Docs API enabled on the OAuth client) ----------
+/sandbox/.config/gogcli/bin/gog docs create "My new doc"           # returns id + webViewLink
+/sandbox/.config/gogcli/bin/gog docs cat <docId>                   # read as plain text
+/sandbox/.config/gogcli/bin/gog docs write <docId> --text "Hello"  # write content (--file path also works)
+/sandbox/.config/gogcli/bin/gog docs find-replace <docId> "old" "new"
+/sandbox/.config/gogcli/bin/gog docs export <docId> --format pdf --out /tmp/out.pdf
 
-# Get file metadata
-/sandbox/.config/gogcli/bin/gog drive get <fileId>
+# ---------- Sheets ----------
+/sandbox/.config/gogcli/bin/gog sheets create "My sheet"
+/sandbox/.config/gogcli/bin/gog sheets get <sheetId> "A1:D10"
+/sandbox/.config/gogcli/bin/gog sheets update <sheetId> "A1" "Hello"
+/sandbox/.config/gogcli/bin/gog sheets append <sheetId> "Sheet1!A:C" '[["row","of","values"]]'
+/sandbox/.config/gogcli/bin/gog sheets clear <sheetId> "A1:Z100"
 
-# Download a file
-/sandbox/.config/gogcli/bin/gog drive download <fileId>
-
-# Upload a file
-/sandbox/.config/gogcli/bin/gog drive upload /tmp/report.pdf
-/sandbox/.config/gogcli/bin/gog drive upload /tmp/image.png --parent <folderId>
-
-# Create a folder
-/sandbox/.config/gogcli/bin/gog drive mkdir "Project Files"
-
-# Share a file
-/sandbox/.config/gogcli/bin/gog drive share <fileId> --email user@company.com --role writer
-
-# Copy a file
-/sandbox/.config/gogcli/bin/gog drive copy <fileId> "Copy of Report"
-
-# Move a file
-/sandbox/.config/gogcli/bin/gog drive move <fileId> --to <folderId>
-
-# Rename a file
-/sandbox/.config/gogcli/bin/gog drive rename <fileId> "New Name"
-
-# List permissions
-/sandbox/.config/gogcli/bin/gog drive permissions <fileId>
-
-# Delete a file
-/sandbox/.config/gogcli/bin/gog drive delete <fileId>
-
-# Get a web URL for a file
-/sandbox/.config/gogcli/bin/gog drive url <fileId>
-
-# List shared drives
-/sandbox/.config/gogcli/bin/gog drive drives
-```
-
-## Sheets
-
-```bash
-# Read a range
-/sandbox/.config/gogcli/bin/gog sheets get <spreadsheetId> "Sheet1!A1:D10"
-
-# Write values to a range
-/sandbox/.config/gogcli/bin/gog sheets update <spreadsheetId> "Sheet1!A1" "value1" "value2" "value3"
-
-# Append a row
-/sandbox/.config/gogcli/bin/gog sheets append <spreadsheetId> "Sheet1!A:D" "col1" "col2" "col3" "col4"
-
-# Clear a range
-/sandbox/.config/gogcli/bin/gog sheets clear <spreadsheetId> "Sheet1!A1:D10"
-
-# Get spreadsheet metadata (list tabs)
-/sandbox/.config/gogcli/bin/gog sheets metadata <spreadsheetId>
-
-# Create a new spreadsheet
-/sandbox/.config/gogcli/bin/gog sheets create "My New Sheet"
-
-# Export as CSV/XLSX/PDF
-/sandbox/.config/gogcli/bin/gog sheets export <spreadsheetId> --format csv
-
-# Find and replace
-/sandbox/.config/gogcli/bin/gog sheets find-replace <spreadsheetId> "old text" "new text"
-
-# Add a new tab
-/sandbox/.config/gogcli/bin/gog sheets add-tab <spreadsheetId> "New Tab"
-
-# Format cells
-/sandbox/.config/gogcli/bin/gog sheets format <spreadsheetId> "Sheet1!A1:D1" --bold --background-color "#4285f4"
-```
-
-## Contacts (read-only)
-
-```bash
-# Search contacts by name/email
+# ---------- Contacts / Tasks / Identity ----------
 /sandbox/.config/gogcli/bin/gog contacts search "Sarah"
-
-# List all contacts
-/sandbox/.config/gogcli/bin/gog contacts list
-
-# Get contact details
-/sandbox/.config/gogcli/bin/gog contacts get <resourceName>
+/sandbox/.config/gogcli/bin/gog tasks lists
+/sandbox/.config/gogcli/bin/gog tasks create <tasklistId> --title "Follow up with client" --due "2026-05-30"
+/sandbox/.config/gogcli/bin/gog me
 ```
 
-## Tasks
+## Recipes (do this, not that)
 
-```bash
-# List task lists
-/sandbox/.config/gogcli/bin/gog tasks lists list
+**"What are my latest N emails / show me my inbox / summarize my last N emails"**
+- **One** call: `gog gmail search in:inbox --max N`. Summarize from subjects/from.
+- **DO NOT** loop `gog gmail thread get <id>` for each result.
 
-# List tasks in a list
-/sandbox/.config/gogcli/bin/gog tasks list <tasklistId>
+**"Summarize THAT email" / "read me email X in detail"**
+- One `gog gmail thread get <id> --sanitize-content` for the specific id.
 
-# Add a task
-/sandbox/.config/gogcli/bin/gog tasks add <tasklistId> --title "Follow up with client" --due "2026-04-12"
+**"Find emails about <topic> and tell me the key points"**
+- `gog gmail search '<topic>' --max 5` for candidates.
+- Then `gog gmail thread get <id> --sanitize-content` for only the 1-2 most relevant.
 
-# Mark task as done
-/sandbox/.config/gogcli/bin/gog tasks done <tasklistId> <taskId>
+**"Send an email to X about Y"**
+- One `gog gmail send --to X --subject "…" --body-html "<p>…</p>"` call. No discovery first.
 
-# Update a task
-/sandbox/.config/gogcli/bin/gog tasks update <tasklistId> <taskId> --title "Updated title"
+**"Schedule a meeting with X next Friday at 2pm"**
+- Resolve "next Friday 2pm" to RFC3339 in your head, then one `gog calendar create primary --summary "…" --from "…" --to "…" --attendees X`.
+- Use `gog calendar freebusy` first only if the user said "find a time that works for everyone".
 
-# Delete a task
-/sandbox/.config/gogcli/bin/gog tasks delete <tasklistId> <taskId>
-```
+**"Create a Google Doc / Sheet with these notes"**
+- Doc from scratch: `gog docs create "Title"` → write with `gog docs write <id> --text "..."`.
+- Doc from local markdown: `gog drive upload notes.md --name "Title" --convert` (single call).
+- Sheet: `gog sheets create "Title"` → `gog sheets update <id> "A1" "data"`.
 
-## Docs
+## Output-size rules of thumb
 
-```bash
-# Read a Google Doc as plain text
-/sandbox/.config/gogcli/bin/gog docs cat <docId>
+| Command | Approx size | When to use |
+|---|---|---|
+| `gmail search` | ~1-2 KB / 10 results | List, overview, summarize |
+| `gmail thread get <id> --sanitize-content` | ~1 KB per message | Read one body |
+| `gmail thread get <id>` (no flags) | ~5-10 KB (raw SMTP headers) | Avoid |
+| `gmail get <id>` | ~5-10 KB raw payload | Prefer `thread get --sanitize-content` |
+| `calendar events --today` | ~0.5-2 KB | Day/week view |
+| `drive ls` / `drive search` | ~1-3 KB | List files |
+| `docs cat <id>` | doc size | Reading full doc text |
+| `sheets get <id> "A1:Z100"` | range size | Reading cells |
 
-# Get doc metadata (title, revision, link)
-/sandbox/.config/gogcli/bin/gog docs info <docId>
+Flags that help any JSON command:
+- `--results-only` — drop envelope fields like `nextPageToken`
+- `--select fields,csv` — pick specific output fields (best-effort)
+- `--fields` — typed projection on most commands
 
-# Show document structure with numbered paragraphs
-/sandbox/.config/gogcli/bin/gog docs structure <docId>
+## Help discovery
 
-# Create a new Google Doc
-/sandbox/.config/gogcli/bin/gog docs create "Meeting Notes"
-
-# Create a doc from a markdown file (supports inline images)
-/sandbox/.config/gogcli/bin/gog docs create "Report" --file /tmp/report.md
-
-# Write content to a doc (replaces all content)
-/sandbox/.config/gogcli/bin/gog docs write <docId> "New content for the document"
-
-# Insert text at a specific position (index)
-/sandbox/.config/gogcli/bin/gog docs insert <docId> --index 1 "Text to insert"
-
-# Find and replace text
-/sandbox/.config/gogcli/bin/gog docs find-replace <docId> "old text" "new text"
-
-# Regex find and replace (sed-style)
-/sandbox/.config/gogcli/bin/gog docs sed <docId> "s/pattern/replacement/g"
-
-# Clear all content from a doc
-/sandbox/.config/gogcli/bin/gog docs clear <docId>
-
-# Copy a doc
-/sandbox/.config/gogcli/bin/gog docs copy <docId> "Copy of Document"
-
-# Export as PDF, DOCX, TXT, or Markdown
-/sandbox/.config/gogcli/bin/gog docs export <docId> --format pdf
-/sandbox/.config/gogcli/bin/gog docs export <docId> --format docx
-/sandbox/.config/gogcli/bin/gog docs export <docId> --format md
-
-# List tabs in a doc
-/sandbox/.config/gogcli/bin/gog docs list-tabs <docId>
-```
+- `gog --help`, then `gog <area> --help` (e.g. `gog gmail --help`). One level is enough; do not recurse on subcommands you have already used successfully.
 
 ## Notes
 
-- All output is JSON by default (GOG_JSON=1 is set).
-- **Email body formatting**: Always use `--body-html` instead of `--body` for any email longer than one sentence. Plain `--body` text preserves literal newlines, causing ugly mid-sentence line breaks. Never insert line breaks inside a paragraph. Use these HTML patterns:
-  - **Paragraphs**: `<p>Text here.</p>`
-  - **Bold/italic**: `<strong>bold</strong>`, `<em>italic</em>`
-  - **Lists**: `<ul><li>Item one</li><li>Item two</li></ul>` (or `<ol>` for numbered)
-  - **Tables**: Always include inline border styles: `<table style="border-collapse:collapse;width:100%"><tr><th style="border:1px solid #ddd;padding:8px;text-align:left;background-color:#f2f2f2">Header</th></tr><tr><td style="border:1px solid #ddd;padding:8px">Value</td></tr></table>`
-  - **Headings**: `<h3>Section Title</h3>`
-  - **Links**: `<a href="https://example.com">link text</a>`
-  - Email clients strip `<style>` blocks, so all styling must be inline via the `style` attribute.
-- Gmail send supports --attach for file attachments (PNG, PDF, etc.), repeatable.
-- Calendar create sends invites when --attendees is provided.
-- Contacts are read-only (search and lookup only).
-- Tasks support full CRUD (create, read, update, delete, mark done).
-- Sheets support reading, writing, appending, formatting, and exporting.
-- Drive supports upload, download, share, mkdir, move, rename, copy, delete, url.
-- Docs supports native read (cat), write, insert, find-replace, regex sed, create, copy, export, clear.
-- Token is managed automatically by the host-side push daemon.
+- **Token rotation:** access token rotates ~55 min via the host-side push daemon; on a 401, retry once after 5 s. Never write `~/.gogcli` or `credentials.json` yourself.
+- **Read-only mode for safety:** the wrapper supports `--gmail-no-send` to block Gmail send (useful for review-only demos).
+- **Docs/Sheets/Slides APIs:** the OAuth client must have each API enabled in Google Cloud Console for those subcommands to work. Gmail / Calendar / Drive are enabled by default in most OAuth projects.
+- **Stderr noise:** `/bin/bash: 1: cannot create /proc/self/oom_score_adj: Permission denied` is harmless container chatter; the JSON on stdout is the answer.
+- **Network scope:** sandbox network policy restricts egress to Google API hosts only.
