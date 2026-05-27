@@ -21,6 +21,31 @@ ok()    { echo -e "${GREEN}  ✓ $1${NC}"; }
 warn()  { echo -e "${YELLOW}  ⚠ $1${NC}"; }
 fail()  { echo -e "${RED}  ✗ $1${NC}"; exit 1; }
 
+# Compatibility wrapper for optional legacy sandbox tweaks. Some newer
+# OpenShell builds make sandbox exec hang or expose /sandbox/.bashrc as
+# read-only, while older NemoClaw/OpenShell installs support these steps.
+optional_sandbox_exec() {
+  local sandbox="$1"
+  shift
+
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 15s openshell sandbox exec -n "$sandbox" --no-tty --timeout 10 -- "$@" >/dev/null 2>&1
+  else
+    openshell sandbox exec -n "$sandbox" --no-tty --timeout 10 -- "$@" >/dev/null 2>&1
+  fi
+}
+
+optional_sandbox_exec_capture() {
+  local sandbox="$1"
+  shift
+
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 15s openshell sandbox exec -n "$sandbox" --no-tty --timeout 10 -- "$@" 2>/dev/null || true
+  else
+    openshell sandbox exec -n "$sandbox" --no-tty --timeout 10 -- "$@" 2>/dev/null || true
+  fi
+}
+
 usage_exit() {
   echo ""
   echo "  Usage: ./install.sh [sandbox-name]"
@@ -361,10 +386,14 @@ openshell sandbox upload "$SANDBOX_NAME" "$BIN_UPLOAD" /sandbox/.config/gogcli/b
   fail "Failed to upload gog binary to sandbox."
 ok "gog binary + wrapper uploaded"
 
-# Add to PATH via .bashrc
-openshell sandbox exec -n "$SANDBOX_NAME" -- bash -c \
-  'grep -q "gogcli/bin" /sandbox/.bashrc 2>/dev/null || echo "export PATH=\"/sandbox/.config/gogcli/bin:\$PATH\"" >> /sandbox/.bashrc' 2>/dev/null
-ok "gog added to sandbox PATH"
+# Latest installs use the absolute path in SKILL.md. Older sandboxes also
+# benefit from PATH wiring, so attempt it as a bounded, non-fatal fallback.
+if optional_sandbox_exec "$SANDBOX_NAME" bash -c \
+  'grep -q "gogcli/bin" /sandbox/.bashrc 2>/dev/null || echo "export PATH=\"/sandbox/.config/gogcli/bin:\$PATH\"" >> /sandbox/.bashrc'; then
+  ok "gog added to sandbox PATH"
+else
+  warn "Could not update /sandbox/.bashrc; gog remains available at /sandbox/.config/gogcli/bin/gog"
+fi
 
 # Upload gog SKILL.md so OpenClaw discovers gog as a tool
 SKILL_UPLOAD=$(mktemp -d /tmp/gogcli-skill-XXXXXX)
@@ -381,9 +410,12 @@ ok "gog SKILL.md deployed to /sandbox/.openclaw/skills/gog/"
 # ─────────────────────────────────────────────────────────────────────
 echo ""
 info "Cleaning up old custom skill files..."
-openshell sandbox exec -n "$SANDBOX_NAME" -- bash -c \
-  'rm -rf /sandbox/.openclaw/skills/gmail /sandbox/.openclaw/skills/gcalendar 2>/dev/null; true' 2>/dev/null
-ok "Old custom skills removed (replaced by gog CLI)"
+if optional_sandbox_exec "$SANDBOX_NAME" bash -c \
+  'rm -rf /sandbox/.openclaw/skills/gmail /sandbox/.openclaw/skills/gcalendar 2>/dev/null; true'; then
+  ok "Old custom skills removed (replaced by gog CLI)"
+else
+  warn "Could not clean old skills via sandbox exec; continuing"
+fi
 
 # ─────────────────────────────────────────────────────────────────────
 # Step 8: Apply network + filesystem policy
@@ -639,22 +671,25 @@ ok "Policy applied (gmail + calendar + drive + docs + sheets + contacts + tasks)
 # ─────────────────────────────────────────────────────────────────────
 echo ""
 info "Clearing agent sessions..."
-openshell sandbox exec -n "$SANDBOX_NAME" -- bash -c \
-  "[ -f $SESSIONS_PATH ] && echo '{}' > $SESSIONS_PATH || true" 2>/dev/null
-ok "Sessions cleared"
+if optional_sandbox_exec "$SANDBOX_NAME" bash -c \
+  "[ -f $SESSIONS_PATH ] && echo '{}' > $SESSIONS_PATH || true"; then
+  ok "Sessions cleared"
+else
+  warn "Could not clear sessions via sandbox exec; reconnect if the agent does not pick up the skill"
+fi
 
 # ─────────────────────────────────────────────────────────────────────
 # Step 10: Verify
 # ─────────────────────────────────────────────────────────────────────
 echo ""
 info "Verifying installation..."
-GOG_CHECK=$(openshell sandbox exec -n "$SANDBOX_NAME" -- bash -c \
-  '[ -x /sandbox/.config/gogcli/bin/gog ] && echo ok' 2>/dev/null || true)
-TOKEN_CHECK=$(openshell sandbox exec -n "$SANDBOX_NAME" -- bash -c \
-  '[ -f /sandbox/.openclaw-data/gogcli/access_token ] && echo ok' 2>/dev/null || true)
+GOG_CHECK=$(optional_sandbox_exec_capture "$SANDBOX_NAME" bash -c \
+  '[ -x /sandbox/.config/gogcli/bin/gog ] && echo ok')
+TOKEN_CHECK=$(optional_sandbox_exec_capture "$SANDBOX_NAME" bash -c \
+  '[ -f /sandbox/.openclaw-data/gogcli/access_token ] && echo ok')
 
-[ "$GOG_CHECK" = "ok" ] && ok "gog CLI installed in sandbox" || warn "gog CLI not found in sandbox"
-[ "$TOKEN_CHECK" = "ok" ] && ok "Access token present" || warn "Access token not yet available (daemon may still be starting)"
+[ "$GOG_CHECK" = "ok" ] && ok "gog CLI installed in sandbox" || warn "Could not verify gog via sandbox exec"
+[ "$TOKEN_CHECK" = "ok" ] && ok "Access token present" || warn "Could not verify access token via sandbox exec"
 
 # ─────────────────────────────────────────────────────────────────────
 # Done

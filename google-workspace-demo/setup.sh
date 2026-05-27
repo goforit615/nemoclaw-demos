@@ -22,6 +22,20 @@ ok()    { echo -e "${GREEN}  ✓ $1${NC}"; }
 warn()  { echo -e "${YELLOW}  ⚠ $1${NC}"; }
 fail()  { echo -e "${RED}  ✗ $1${NC}"; exit 1; }
 
+# Compatibility wrapper for optional legacy sandbox tweaks. Some newer
+# OpenShell builds make sandbox exec hang or expose /sandbox/.bashrc as
+# read-only, while older NemoClaw/OpenShell installs support these steps.
+optional_sandbox_exec() {
+  local sandbox="$1"
+  shift
+
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 15s openshell sandbox exec -n "$sandbox" --no-tty --timeout 10 -- "$@" >/dev/null 2>&1
+  else
+    openshell sandbox exec -n "$sandbox" --no-tty --timeout 10 -- "$@" >/dev/null 2>&1
+  fi
+}
+
 SANDBOX=${1:-}
 if [ -z "$SANDBOX" ]; then
   SANDBOX=$(python3 -c "
@@ -153,9 +167,12 @@ openshell sandbox upload "$SANDBOX" "$SKILL_UPLOAD/gog" /sandbox/.openclaw/skill
   warn "Skill upload warning (non-fatal)"
 ok "gog SKILL.md deployed"
 
-openshell sandbox exec -n "$SANDBOX" -- bash -c \
-  'grep -q "gogcli/bin" /sandbox/.bashrc 2>/dev/null || echo "export PATH=\"/sandbox/.config/gogcli/bin:\$PATH\"" >> /sandbox/.bashrc' 2>/dev/null
-ok "PATH verified"
+if optional_sandbox_exec "$SANDBOX" bash -c \
+  'grep -q "gogcli/bin" /sandbox/.bashrc 2>/dev/null || echo "export PATH=\"/sandbox/.config/gogcli/bin:\$PATH\"" >> /sandbox/.bashrc'; then
+  ok "PATH verified"
+else
+  warn "Could not update /sandbox/.bashrc; gog remains available at /sandbox/.config/gogcli/bin/gog"
+fi
 
 # ── Re-apply network policy ──────────────────────────────────────────
 
@@ -399,9 +416,12 @@ ok "Policy applied (gmail + calendar + drive + docs + sheets + contacts + tasks)
 # ── Clear sessions ───────────────────────────────────────────────────
 
 info "Clearing sessions..."
-openshell sandbox exec -n "$SANDBOX" -- bash -c \
-  "[ -f $SESSIONS_PATH ] && echo '{}' > $SESSIONS_PATH || true" 2>/dev/null
-ok "Sessions cleared"
+if optional_sandbox_exec "$SANDBOX" bash -c \
+  "[ -f $SESSIONS_PATH ] && echo '{}' > $SESSIONS_PATH || true"; then
+  ok "Sessions cleared"
+else
+  warn "Could not clear sessions via sandbox exec; reconnect if the agent does not pick up the skill"
+fi
 
 echo ""
 echo -e "${GREEN}  Re-deploy complete.${NC}"
