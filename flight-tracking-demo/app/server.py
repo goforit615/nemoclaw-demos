@@ -143,10 +143,30 @@ OPENCLAW_TIMEOUT_S = int(os.getenv("OPENCLAW_TIMEOUT_S", "180"))
 # Where the agent writes its per-session JSONL transcripts. We read
 # these post-call to surface tool calls + thinking back to the chat
 # UI when the user has the "Show tool calls / thinking" toggle on.
-OPENCLAW_AGENT_HOME = os.getenv(
-    "OPENCLAW_AGENT_HOME",
-    f"/sandbox/.openclaw-data/agents/{OPENCLAW_AGENT}",
-).rstrip("/")
+#
+# install.sh writes the detected path into flight.env so this just
+# reads OPENCLAW_AGENT_HOME. When it's unset (dev runs, pre-0.0.44
+# image, etc.) we fall back to whichever layout's agents/ dir is
+# actually present on disk:
+#   /sandbox/.openclaw/agents/<agent>/        (openshell ≥ 0.0.44)
+#   /sandbox/.openclaw-data/agents/<agent>/   (legacy)
+# Both layouts are supported so the chat panel works without code
+# changes regardless of which sandbox build the operator onboarded.
+def _detect_agent_home() -> str:
+    explicit = os.getenv("OPENCLAW_AGENT_HOME", "").strip().rstrip("/")
+    if explicit:
+        return explicit
+    new_path = f"/sandbox/.openclaw/agents/{OPENCLAW_AGENT}"
+    legacy_path = f"/sandbox/.openclaw-data/agents/{OPENCLAW_AGENT}"
+    if Path(new_path).is_dir():
+        return new_path
+    if Path(legacy_path).is_dir():
+        return legacy_path
+    # Neither present yet — go with the new layout (matches openclaw
+    # ≥ 2026.5.x). The sessions dir is created on first turn anyway.
+    return new_path
+
+OPENCLAW_AGENT_HOME = _detect_agent_home()
 OPENCLAW_SESSIONS_DIR = f"{OPENCLAW_AGENT_HOME}/sessions"
 
 DEFAULT_ANALYSIS_RADIUS_KM = 80.0
@@ -2849,6 +2869,8 @@ async def health() -> dict[str, Any]:
         "openclaw_bin": OPENCLAW_BIN,
         "openclaw_available": Path(OPENCLAW_BIN).exists(),
         "openclaw_agent": OPENCLAW_AGENT,
+        "openclaw_agent_home": OPENCLAW_AGENT_HOME,
+        "openclaw_sessions_dir_exists": Path(OPENCLAW_SESSIONS_DIR).is_dir(),
     }
 
 

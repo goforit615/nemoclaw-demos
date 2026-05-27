@@ -2,6 +2,8 @@
 
 Add a live **FlightOps** airspace console to your NemoClaw sandbox: real-time aircraft on an interactive map, agent-driven map control from chat or Telegram, and read-only overlays from public aviation feeds (airspace, weather, NAS advisories, and airport detail). OpenSky credentials stay on the host; the sandbox reaches upstream APIs only through policy-enforced proxies.
 
+> **Compatibility:** Verified against `openshell 0.0.44` + `openclaw 2026.5.18` (new `/sandbox/.openclaw/` layout) and earlier builds that still use the legacy `/sandbox/.openclaw-data/` layout. `install.sh` auto-detects which one is in play — no flags needed.
+
 ---
 
 ## What You Get
@@ -51,11 +53,13 @@ cd nemoclaw-demos/flight-tracking-demo
 
 The installer:
 
-1. Starts host-side **opensky-proxy** (port 9202) and **faa-proxy** (port 9203) when needed
-2. Applies an OpenShell network policy (sandbox → host proxies + allowed public endpoints)
-3. Deploys the FastAPI app, static UI, and `flight-tracking` skill into the sandbox
-4. Writes `flight.env` with proxy URLs only — **no OpenSky secrets in the sandbox**
-5. Restarts uvicorn on port **18890** and sets up host port forwarding
+1. **Auto-detects the sandbox layout** — `/sandbox/.openclaw/` (openshell ≥ 0.0.44) vs legacy `/sandbox/.openclaw-data/` — and routes the skill, agent home, and `openclaw.json` mutation to the right place.
+2. Starts host-side **opensky-proxy** (port 9202) and **faa-proxy** (port 9203).
+3. Applies an OpenShell network policy (sandbox → host proxies + allowed public endpoints, with `opensky-network.org` / `auth.opensky-network.org` removed so the only OpenSky path is the host proxy).
+4. Deploys the FastAPI app, static UI, and `flight-tracking` skill into the sandbox.
+5. On the new layout, enables `flight-tracking` in `openclaw.json` and ensures `tools.profile=coding` so the agent surfaces `exec` in its system prompt (without this the agent "spins out" hunting for tools).
+6. Writes `flight.env` with proxy URLs + the detected agent home — **no OpenSky secrets in the sandbox**.
+7. Restarts uvicorn on port **18890** and sets up host port forwarding (systemd-user unit, with `openshell forward` as fallback).
 
 Open the map (after forwarding — see below):
 
@@ -67,6 +71,25 @@ On a **Brev** or remote VM, forward from your laptop:
 
 ```bash
 brev port-forward <instance> --port 18890:18890
+```
+
+### Installer flags
+
+| Flag | Purpose |
+|---|---|
+| `--status` | Print install + proxy + tunnel state and exit |
+| `--uninstall` | Stop proxies, drop policy block, remove skill + app, disable tunnel |
+| `--update-creds` | Force-prompt for new OpenSky OAuth2 credentials |
+| `--skip-systemd` | Don't install/touch the systemd-user tunnel (use `openshell forward`) |
+| `--port <N>` | FastAPI port (default `18890`) |
+| `--opensky-port <N>` | opensky-proxy port (default `9202`) |
+| `--faa-port <N>` | faa-proxy port (default `9203`) |
+
+Env-var equivalents: `OPENSHELL_GATEWAY`, `OPENSHELL_SANDBOX`, `OPENSKY_PROXY_HOST`, `FLIGHT_APP_PORT`, `SKIP_SYSTEMD_TUNNEL=1`.
+
+```bash
+./install.sh --status      # what's installed + is everything up?
+./install.sh --uninstall   # clean removal
 ```
 
 ---
@@ -121,6 +144,10 @@ Wire Telegram through NemoClaw as usual. The same `flight-tracking` skill drives
 | No aircraft / rate limited | Ensure `opensky-proxy.py` is running on the host; check `/api/health` for `opensky_auth: "host-proxy"` |
 | NAS / METAR layer fails | Start `faa-proxy.py` on host :9203; re-run `./install.sh` |
 | Agent says map updated but UI unchanged | Open `http://localhost:18890` first; check `delivered` in tool response |
+| Chat panel hangs / says "openclaw binary not found" | `./install.sh --status` to see what's missing; usually means the sandbox image lost `/usr/local/bin/openclaw` — re-run `nemoclaw onboard` |
+| Agent doesn't pick up the skill ("don't know about flights") | Disconnect + reconnect the TUI / chat to force the gateway to reload `openclaw.json`; verify `skills.entries["flight-tracking"].enabled` and `tools.profile=="coding"` in `/sandbox/.openclaw/openclaw.json` (or re-run `./install.sh`) |
+| Wrong sessions path on legacy build | `install.sh` writes `OPENCLAW_AGENT_HOME` into `flight.env` based on detected layout; server.py falls back to auto-detect when the env var is unset — check `/api/health.openclaw_agent_home` |
+| Want to roll back / move sandboxes | `./install.sh --uninstall` removes everything cleanly; re-run `./install.sh <new-sandbox>` |
 
 ---
 
