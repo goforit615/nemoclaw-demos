@@ -1,6 +1,34 @@
 ---
 name: gog
-description: "Google Workspace via the gog CLI. Use when the user asks about Gmail (email, inbox, send, reply, drafts), Calendar (events, meetings, availability, RSVP, focus time, OOO), Drive (files, upload, download, share), Docs (read/write/edit document), Sheets (read/write cells), Contacts (lookup), or Tasks (to-do list). Invoke via the `exec` tool with `command: \"/sandbox/.config/gogcli/bin/gog <subcommand>\"`. Output is JSON."
+description: |
+  Google Workspace via the gog CLI. Use for Gmail (email/inbox/send/reply/drafts),
+  Calendar (events/meetings/availability/RSVP/focus time/OOO), Drive (files/upload/
+  download/share), Docs (read/write/edit), Sheets (read/write cells), Contacts, Tasks.
+  Invoke with the `exec` tool. Binary: `/sandbox/.config/gogcli/bin/gog` (auto-authed
+  via host-side push daemon). All output is JSON on stdout.
+
+  FAST PATH — go straight to the right command, do not pre-explore:
+  - "show/list/summarize my last N emails":
+      ONE call: `exec /sandbox/.config/gogcli/bin/gog gmail search in:inbox --max N`
+      The result already has id, date, from, subject, labels per thread — that is
+      enough to summarize. DO NOT loop `gmail get` per result.
+  - "read/summarize THAT one email":
+      ONE call: `exec /sandbox/.config/gogcli/bin/gog gmail thread get <id> --sanitize-content`
+      (sanitize-content strips HTML, removes URLs, drops the raw SMTP payload —
+      ~1 KB clean JSON instead of ~10 KB of noise).
+  - "send email": ONE `gog gmail send --to … --subject … --body-html "<p>…</p>"`.
+  - "what's on my calendar today/week":
+      ONE `gog calendar events list --time-min now --time-max +1d` (or +7d).
+
+  DO NOT:
+  - Call `memory_search` first — Gmail/Calendar/Drive queries do not live in memory.
+  - Call `gog --help`, `gog status`, or `gog <area> --help` before your first real
+    command. Read SKILL.md only if a command fails with "unknown flag/command".
+  - Call `gog gmail get` per item in a list — use the `search` output you already have.
+
+  Auth notes: tokens auto-rotate; if a call returns 401, retry once after ~5s. The
+  harmless `cannot create /proc/self/oom_score_adj: Permission denied` line on
+  stderr can be ignored; the JSON on stdout is the answer.
 ---
 
 # gog — Google Workspace CLI
